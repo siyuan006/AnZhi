@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -205,19 +206,29 @@ class TestTimestamps:
         db_session.add(item)
         db_session.commit()
         created_at = item.created_at
-        first_updated_at = item.updated_at
 
-        # 直接把时间往前拨，模拟「过了一段时间后再修改」
+        # 把时间往前拨到一个 utcnow() 不可能产生的值（哨兵），
+        # 这样才能区分「onupdate 真的重新写了时间」和「值恰好没变」。
+        # 用字符串绑定而不是 datetime 对象：Python 3.12 起 sqlite3
+        # 已移除 datetime 的隐式适配器，裸 SQL 里传 datetime 会告警甚至报错。
+        sentinel = datetime(2000, 1, 1)
         db_session.execute(
-            text("UPDATE knowledge SET updated_at = '2000-01-01 00:00:00'")
+            text("UPDATE knowledge SET updated_at = :value"),
+            {"value": sentinel.strftime("%Y-%m-%d %H:%M:%S.%f")},
         )
         db_session.commit()
         db_session.refresh(item)
-        assert item.updated_at != first_updated_at
+        assert item.updated_at == sentinel
 
         item.title = "改过的标题"
         db_session.commit()
         db_session.refresh(item)
 
-        assert item.updated_at != first_updated_at
+        # 这里**不能**写成 `updated_at != 改动前的 updated_at`：
+        # Windows 上 datetime.now() 的实际分辨率约为 1 毫秒
+        # （实测连调两万次只返回 11 个不同值），
+        # 插入与更新若落在同一个时钟刻度内，两次 utcnow() 连微秒都完全一样，
+        # 断言会随机失败。改为断言「不再是哨兵值」+「接近当前时间」。
+        assert item.updated_at != sentinel
+        assert utcnow() - item.updated_at < timedelta(seconds=5)
         assert item.created_at == created_at
