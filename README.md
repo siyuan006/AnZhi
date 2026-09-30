@@ -31,7 +31,7 @@
 | 15 | 测试 | ✅ 已完成（前后端全量 + 真实后端联调 + 异常情况逐条审计） |
 | 16 | UI 优化 | ✅ 已完成（小屏与大字号适配 + 状态页补齐 + 取色收敛） |
 | 17 | APK 打包 | ✅ 已完成（release 包可安装；应用名与图标、签名配置、后端地址注入） |
-| 18 | GitHub 发布 | ⬜ 待开始 |
+| 18 | GitHub 发布 | 🟡 仓库已推送；Release 待创建（见下方「GitHub 发布」） |
 
 **当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识库检索引用 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 完整的社区互动（浏览 / 评论 / 点赞 / 发帖 / 删帖）+ 个性化（关注领域 / 首页布局 / 通知设置）+ 可安装的 release APK。**
 
@@ -378,7 +378,7 @@ uvicorn app.main:app --reload
 
 ```bash
 cd backend
-.venv\Scripts\python.exe -m pytest      # 415 passed
+.venv\Scripts\python.exe -m pytest      # 547 passed
 ```
 
 ### API 配置
@@ -647,6 +647,32 @@ adb install -r build\app\outputs\flutter-apk\app-release.apk
 
 ---
 
+## GitHub 发布（阶段 18）
+
+仓库：**<https://github.com/siyuan006/AnZhi>**（公开，默认分支 `main`）
+
+```bash
+git clone https://github.com/siyuan006/AnZhi.git
+```
+
+### Release 待创建
+
+发布说明已经写好并随仓库版本化：[docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md)。
+但 **Release 本身还没有创建** —— 创建 Release 需要带鉴权的 API 调用
+（`gh` CLI 或 personal access token），本机两者都没有配置。这一步由仓库所有者
+手动完成：
+
+1. 打开 <https://github.com/siyuan006/AnZhi/releases/new?tag=v1.0.0>
+2. Tag 选 `v1.0.0`，标题填 `v1.0.0`
+3. 说明复制 `docs/RELEASE_NOTES.md` 中 `## v1.0.0` 以下的内容
+4. 把 `frontend/build/app/outputs/flutter-apk/app-release.apk`（49.1 MB）拖进附件区
+5. 发布
+
+> APK 不进版本库（`build/` 已被忽略），附件只能从本地构建产物上传。
+> 装好之后还需要在后端那台机器上跑起服务，见上方「APK 打包（阶段 17）」的安装部分。
+
+---
+
 ## 开发规范
 
 - **提交前缀：** `feat:` `fix:` `refactor:` `docs:` `test:` `chore:`
@@ -683,6 +709,7 @@ adb install -r build\app\outputs\flutter-apk\app-release.apk
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 技术架构 |
 | [docs/API.md](docs/API.md) | 接口文档 |
 | [docs/DATABASE.md](docs/DATABASE.md) | 数据库设计 |
+| [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md) | 版本发布说明（含 APK 的 sha256 与已知限制） |
 
 ---
 
