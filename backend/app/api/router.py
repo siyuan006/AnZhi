@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import auth, chat, favorites, health, history, knowledge
+from app.api import auth, chat, favorites, health, history, knowledge, posts
 
 api_router = APIRouter()
 api_router.include_router(health.router)
@@ -17,7 +17,8 @@ api_router.include_router(chat.router)
 api_router.include_router(auth.router)
 api_router.include_router(favorites.router)
 api_router.include_router(history.router)
+api_router.include_router(posts.router)
 
 # 后续阶段在此追加：
-#   第十二阶段 api_router.include_router(community.router)   # 社区
+#   第十二阶段 评论 / 点赞 / 发帖（在 api/posts.py 内继续扩展）
 #   第十三阶段 api_router.include_router(settings.router)    # 个性化设置

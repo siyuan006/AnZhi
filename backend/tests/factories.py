@@ -65,6 +65,33 @@ def make_comment(**overrides: object) -> Comment:
     return Comment(**payload)  # type: ignore[arg-type]
 
 
+def create_user(db: Session, **overrides: object) -> User:
+    """构造并**立即落库**一个用户，返回该对象。
+
+    `username` 默认是 `tester`，要建多个用户时必须各自传不同的用户名 ——
+    唯一约束是真的生效的。
+    """
+    user = make_user(**overrides)
+    db.add(user)
+    db.commit()
+    return user
+
+
+def create_post(db: Session, **overrides: object) -> Post:
+    """构造并**立即落库**一个帖子，返回该对象。
+
+    注意 `is_published` 默认是 **True**（与知识卡片相反，见 Post 模型的
+    文档字符串）：用户自己发的帖子默认可见。想验证「隐藏的帖子不对外
+    出现」必须显式传 `is_published=False`。
+
+    帖子有指向 `users.id` 的外键，落库前要先有用户。
+    """
+    item = make_post(**overrides)
+    db.add(item)
+    db.commit()
+    return item
+
+
 def create_knowledge(db: Session, **overrides: object) -> Knowledge:
     """构造并**立即落库**一篇知识卡片，返回该对象。
 

@@ -1,4 +1,5 @@
 import '../core/app_constants.dart';
+import '../core/relative_time.dart';
 
 /// 安知 —— 知识卡片数据模型
 ///
@@ -92,7 +93,10 @@ class KnowledgeItem {
       author: json['author'] as String?,
       viewCount: (json['view_count'] as num?)?.toInt() ?? 0,
       isFavorited: json['is_favorited'] as bool? ?? false,
-      createdAt: DateTime.tryParse(json['created_at'] as String? ?? ''),
+      // 必须走 parseServerTime：后端吐的是不带时区的 naive UTC，
+      // 直接 DateTime.parse 会当成本地时间，UTC+8 下整体偏 8 小时。
+      // 收藏、浏览历史、帖子三处都踩过这个坑，这里是最后一处。
+      createdAt: parseServerTime(json['created_at'] as String?),
     );
   }
 

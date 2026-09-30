@@ -556,18 +556,104 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
 
 ## 7. 社区
 
-| 方法 | 路径 | 说明 | 依据 |
+| 方法 | 路径 | 说明 | 状态 |
 |---|---|---|---|
-| `GET` | `/api/posts` | 帖子列表（分页） | 第四十一节 |
-| `GET` | `/api/posts/{id}` | 帖子详情（含评论数） | |
-| `POST` | `/api/posts` | 发布帖子 | 第四十一节 |
-| `DELETE` | `/api/posts/{id}` | 删除自己的帖子 | |
-| `GET` | `/api/posts/{id}/comments` | 评论列表 | |
-| `POST` | `/api/posts/{id}/comments` | 发表评论 | |
-| `POST` | `/api/posts/{id}/like` | 点赞 | |
-| `DELETE` | `/api/posts/{id}/like` | 取消点赞 | |
+| `GET` | `/api/posts` | 帖子列表（分页） | ✅ 阶段 12a |
+| `GET` | `/api/posts/{id}` | 帖子详情（含正文） | ✅ 阶段 12a |
+| `GET` | `/api/posts/{id}/comments` | 评论列表 | 阶段 12b |
+| `POST` | `/api/posts/{id}/comments` | 发表评论 | 阶段 12b |
+| `POST` | `/api/posts/{id}/like` | 点赞 | 阶段 12c |
+| `DELETE` | `/api/posts/{id}/like` | 取消点赞 | 阶段 12c |
+| `POST` | `/api/posts` | 发布帖子 | 阶段 12d |
+| `DELETE` | `/api/posts/{id}` | 删除自己的帖子 | 阶段 12d |
 
-**发布帖子请求体：**
+**V1.0 不实现：** 私信、关注用户、复杂推荐、AI 审核（PROJECT_SPEC 第二十节）
+
+### `GET /api/posts`
+
+**鉴权：** 不需要。社区内容公开，未登录也能读。
+
+**查询参数：** 分页参数见 1.3，另有两个筛选：
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `category_id` | int | 只看某个分类的帖子 |
+| `keyword` | string | 在标题与正文里搜 |
+
+两个筛选都在**服务端**执行，不是取回整页再本地过滤 —— 否则「第 1 页
+20 条」里筛出来的条数会和 `total` 对不上。
+
+**响应：**
+
+```json
+{
+  "total": 27,
+  "page": 1,
+  "page_size": 20,
+  "items": [
+    {
+      "id": 1,
+      "title": "宿舍用电的几点提醒",
+      "summary": "不要在一个插排上同时接大功率电器。电线过热是宿舍火灾最常见的原因……",
+      "category_id": 2,
+      "category_name": "用电安全",
+      "author": { "id": 3, "name": "小艾" },
+      "like_count": 3,
+      "comment_count": 1,
+      "created_at": "2026-09-30T10:00:00.123456"
+    }
+  ]
+}
+```
+
+**列表项没有 `content`。** `summary` 由正文截断而来（去换行、超长加省略号），
+不是独立存储的字段 —— 数据库里只有 `content`。列表页拿到的文字够显示两三行，
+要读全文得请求详情接口。
+
+**`author` 只有 `name`，没有 `username`。** 用户名是登录凭据的一半，
+公开它等于把每个发帖人的登录名挂在网上，配合撞库尝试很不划算。
+`name` 取昵称，没设昵称时退回用户名。
+
+**`category_id` / `category_name` 可以是 `null`。** 帖子允许不属于任何分类，
+这是数据库层面就允许的情况，不是脏数据。前端此时不画分类标签。
+
+**排序：** `created_at` 倒序，同一时刻的按 `id` 倒序兜底。
+
+### `GET /api/posts/{id}`
+
+**鉴权：** 不需要。
+
+**响应：** 与列表项同构，但用 `content`（全文）替换 `summary`：
+
+```json
+{
+  "id": 1,
+  "title": "宿舍用电的几点提醒",
+  "content": "不要在一个插排上同时接大功率电器。……",
+  "category_id": 2,
+  "category_name": "用电安全",
+  "author": { "id": 3, "name": "小艾" },
+  "like_count": 3,
+  "comment_count": 1,
+  "created_at": "2026-09-30T10:00:00.123456"
+}
+```
+
+**已隐藏的帖子返回 `404` 而不是 `403`：** 未发布的帖子对普通用户等同于不存在，
+返回 `403` 反而等于确认了「这个 id 上有东西」。
+
+**响应示例：**
+
+```json
+{ "detail": "帖子不存在或已删除" }
+```
+
+**`created_at` 是 naive UTC。** 全项目统一（见 `backend/app/database/base.py`
+的 `utcnow`），序列化出来**不带 `Z`**。客户端必须显式按 UTC 解释，
+否则 UTC+8 下会整体偏 8 小时 —— 这个坑不会报错，只会让「刚刚」变成「8 小时前」。
+前端统一走 `lib/core/relative_time.dart` 的 `parseServerTime`。
+
+**发布帖子请求体（阶段 12d）：**
 
 ```json
 {
@@ -576,8 +662,6 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
   "category_id": 5
 }
 ```
-
-**V1.0 不实现：** 私信、关注用户、复杂推荐、AI 审核（PROJECT_SPEC 第二十节）
 
 ---
 

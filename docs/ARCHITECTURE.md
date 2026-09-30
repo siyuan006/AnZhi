@@ -99,7 +99,7 @@ frontend/lib/
 | `app.dart` | 根组件：主题 + 首页装配 |
 | `core/app_constants.dart` | 六大分类、三级风险、首页模块标识 |
 | `core/app_theme.dart` | Material 3 主题与配色 |
-| `core/sample_data.dart` | ⚠️ 占位数据，阶段 7 后删除 |
+| `core/relative_time.dart` | 后端 naive UTC 时间戳的解析与相对时间显示 |
 | `models/knowledge_item.dart` | 知识卡片模型 |
 | `models/ai_answer.dart` | AI 结构化回答模型 + 聊天消息模型 |
 | `widgets/main_scaffold.dart` | 底部导航主框架 |

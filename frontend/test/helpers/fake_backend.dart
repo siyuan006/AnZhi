@@ -7,6 +7,7 @@ import 'package:anzhi/services/auth_store.dart';
 import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/favorite_api.dart';
 import 'package:anzhi/services/history_api.dart';
+import 'package:anzhi/services/post_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -200,6 +201,16 @@ class FakeBackend {
         ),
       );
 
+  /// 社区接口。**不需要 token** —— 帖子是公开内容，
+  /// 与收藏 / 历史那两个「这份数据属于谁」的接口不同。
+  PostApi postApi({Duration? timeout}) => PostApi(
+        client: ApiClient(
+          httpClient: httpClient,
+          baseUrl: 'http://test.local',
+          timeout: timeout,
+        ),
+      );
+
   /// 预置一个已注册的账号
   void seedAccount(String username, String password, {String? nickname}) {
     accounts[username] = password;
@@ -251,6 +262,134 @@ class FakeBackend {
       ..remove(knowledgeId)
       ..add(knowledgeId);
     _historyAges['$username/$knowledgeId'] = Duration.zero;
+  }
+
+  // --- 社区帖子（/api/posts）----------------------------------------------
+
+  /// 帖子目录，与真实后端一样按发布时间倒序返回（最新的在前）。
+  ///
+  /// 默认给两条，且**刻意带一个没有分类的**：帖子可以不属于任何分类
+  /// 是真实存在的情况（数据库里 `category_id` 可空），
+  /// 假后端只给有分类的帖子的话，界面漏处理这一支也测不出来。
+  List<Map<String, dynamic>> posts = <Map<String, dynamic>>[
+    <String, dynamic>{
+      'id': 1,
+      'title': '宿舍用电的几点提醒',
+      'summary': '不要在一个插排上同时接大功率电器。',
+      'content': '不要在一个插排上同时接大功率电器，电线过热是宿舍火灾最常见的原因。',
+      'category_id': 2,
+      'author': <String, dynamic>{'id': 1, 'name': '小艾'},
+      'like_count': 3,
+      'comment_count': 1,
+      'created_at': '2026-09-30T10:00:00',
+    },
+    <String, dynamic>{
+      'id': 2,
+      'title': '遇到诈骗电话我是这么处理的',
+      'summary': '挂掉，打 96110，把号码报给家人。',
+      'content': '挂掉，打 96110，把号码报给家人，让他们也留意。',
+      'category_id': null,
+      'author': <String, dynamic>{'id': 2, 'name': '匿名同学'},
+      'like_count': 5,
+      'comment_count': 0,
+      'created_at': '2026-09-29T10:00:00',
+    },
+  ];
+
+  /// 预置一条帖子，返回它的 id。
+  ///
+  /// 不传 `category_id` 就是「不属于任何分类」。
+  int seedPost({
+    required String title,
+    String content = '正文。',
+    int? categoryId,
+    String author = '小艾',
+    int likeCount = 0,
+    int commentCount = 0,
+    String createdAt = '2026-09-30T12:00:00',
+  }) {
+    final int id = posts.length + 1;
+    posts = <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': id,
+        'title': title,
+        'summary': content,
+        'content': content,
+        'category_id': categoryId,
+        'author': <String, dynamic>{'id': 1, 'name': author},
+        'like_count': likeCount,
+        'comment_count': commentCount,
+        'created_at': createdAt,
+      },
+      ...posts,
+    ];
+    return id;
+  }
+
+  /// 清空帖子目录（测「还没有人发帖」用）
+  void seedNoPosts() => posts = <Map<String, dynamic>>[];
+
+  Map<String, dynamic> _postSummaryJson(Map<String, dynamic> post) {
+    // 与真实后端一致：列表项**不带 content**，只有 summary
+    final Map<String, dynamic> copy = Map<String, dynamic>.from(post)
+      ..remove('content');
+    return copy;
+  }
+
+  Map<String, dynamic> _postPage(Map<String, String> query) {
+    Iterable<Map<String, dynamic>> list = posts;
+
+    final String? keyword = query['keyword'];
+    if (keyword != null && keyword.isNotEmpty) {
+      list = list.where(
+        (Map<String, dynamic> p) =>
+            '${p['title']}'.contains(keyword) ||
+            '${p['content']}'.contains(keyword),
+      );
+    }
+
+    final int? categoryId = int.tryParse(query['category_id'] ?? '');
+    if (categoryId != null) {
+      list = list.where((Map<String, dynamic> p) => p['category_id'] == categoryId);
+    }
+
+    final List<Map<String, dynamic>> all = list.toList();
+    final int page = int.tryParse(query['page'] ?? '1') ?? 1;
+    final int pageSize = int.tryParse(query['page_size'] ?? '20') ?? 20;
+    final int start = (page - 1) * pageSize;
+    final List<Map<String, dynamic>> slice = start >= all.length
+        ? const <Map<String, dynamic>>[]
+        : all.sublist(start, (start + pageSize).clamp(0, all.length));
+
+    return <String, dynamic>{
+      'total': all.length,
+      'page': page,
+      'page_size': pageSize,
+      'items': slice.map(_postSummaryJson).toList(),
+    };
+  }
+
+  Future<http.Response> _handlePosts(http.Request request, String path) async {
+    if (path == '/api/posts') {
+      return _json(_postPage(request.url.queryParameters), 200);
+    }
+
+    final int? id = int.tryParse(path.substring('/api/posts/'.length));
+    final Map<String, dynamic>? post = id == null
+        ? null
+        : posts.cast<Map<String, dynamic>?>().firstWhere(
+              (Map<String, dynamic>? p) => p!['id'] == id,
+              orElse: () => null,
+            );
+
+    if (post == null) {
+      return _json(<String, dynamic>{'detail': '帖子不存在或已删除'}, 404);
+    }
+    if (request.method == 'DELETE') {
+      posts = posts.where((Map<String, dynamic> p) => p['id'] != id).toList();
+      return _json(<String, dynamic>{}, 204);
+    }
+    return _json(post, 200);
   }
 
   Map<String, dynamic> _userJson(String username) => <String, dynamic>{
@@ -311,6 +450,10 @@ class FakeBackend {
 
     if (path == '/api/history' || path.startsWith('/api/history/')) {
       return _handleHistory(request, path);
+    }
+
+    if (path == '/api/posts' || path.startsWith('/api/posts/')) {
+      return _handlePosts(request, path);
     }
 
     if (path == '/api/knowledge') {

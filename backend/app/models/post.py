@@ -12,9 +12,11 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampMixin
+from app.models.category import Category
+from app.models.user import User
 
 
 class Post(Base, TimestampMixin):
@@ -56,6 +58,16 @@ class Post(Base, TimestampMixin):
     is_published: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=True, server_default=text("1")
     )
+
+    # lazy="joined"：列表里每条都要显示作者署名与分类名，默认懒加载会 N+1。
+    # 与 Knowledge.category、Favorite.knowledge 的处理保持一致。
+    author: Mapped["User"] = relationship(lazy="joined")
+    category: Mapped["Category | None"] = relationship(lazy="joined")
+
+    @property
+    def author_name(self) -> str:
+        """对外显示的署名：昵称优先，没有昵称时退回用户名。"""
+        return self.author.nickname or self.author.username
 
     def __repr__(self) -> str:
         return f"<Post id={self.id} title={self.title!r}>"

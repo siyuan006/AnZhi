@@ -5,12 +5,14 @@ import 'package:anzhi/models/favorite_item.dart';
 import 'package:anzhi/models/history_item.dart';
 import 'package:anzhi/models/knowledge_item.dart';
 import 'package:anzhi/models/paged_result.dart';
+import 'package:anzhi/models/post_item.dart';
 import 'package:anzhi/services/api_client.dart';
 import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/favorite_api.dart';
 import 'package:anzhi/services/history_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
+import 'package:anzhi/services/post_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 安知 —— 真实后端连通性测试
@@ -101,6 +103,18 @@ void main() {
     ),
   );
 
+  // 社区同样用独立的 ApiClient。与上面几个**不同**：它不带 token，
+  // 因为 `GET /api/posts` 与 `GET /api/posts/{id}` 都是公开接口，
+  // 读社区内容本来就不需要身份（docs/API.md 第 7 节）。
+  //
+  // 这也意味着「社区」这一组**没有顺序依赖** —— 不必先跑「认证」组，
+  // 单独 `--plain-name` 跑也成立。
+  final ApiClient postsClient = ApiClient(
+    baseUrl: baseUrl,
+    timeout: const Duration(seconds: 5),
+  );
+  final PostApi posts = PostApi(client: postsClient);
+
   /// 本次运行创建的账号名。
   ///
   /// **这些用例会在真实数据库里创建用户。** 名字带固定前缀便于事后清理，
@@ -117,6 +131,7 @@ void main() {
     favorites.dispose();
     authedApi.dispose();
     history.dispose();
+    posts.dispose();
   });
 
   group(
@@ -755,6 +770,167 @@ void main() {
         ? false
         : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
   );
+
+  group(
+    '真实后端 · 社区',
+    () {
+      /// 取一条帖子的 id；一条都没有时返回 null 并**跳过**。
+      ///
+      /// 阶段 12a 只有读接口，发帖（12d）还没做，所以这里造不出数据来 ——
+      /// 空库时只能如实跳过，不能拿「列表是空的」冒充「详情能读出正文」。
+      Future<int?> firstPostId() async {
+        final PagedResult<PostItem> all = await posts.fetchPosts();
+        if (all.items.isEmpty) {
+          markTestSkipped('数据库里当前没有帖子，详情相关断言未验证（发帖在阶段 12d）');
+          return null;
+        }
+        return all.items.first.id;
+      }
+
+      test('未登录也能读列表，不是 401', () async {
+        // 社区内容是公开的。这一条挂掉通常意味着有人给路由挂上了
+        // get_current_user 而不是 get_optional_user —— 那会让整个社区
+        // 对未登录用户消失，而且前端只会看到一个空白页。
+        final PagedResult<PostItem> page = await posts.fetchPosts();
+
+        expect(page.total, greaterThanOrEqualTo(0));
+        expect(page.items.length, lessThanOrEqualTo(page.total));
+      });
+
+      test('列表响应的字段名与客户端解析的一致', () async {
+        // 这是假后端**永远发现不了**的一类问题：假后端是按客户端预期
+        // 手写的，字段名两边一起改就会一起「对」。只有拿真实响应体的
+        // 原始 key 去比，才能发现后端把 summary 改叫了 excerpt 之类。
+        final Object? body = await postsClient.getJson(
+          '/api/posts',
+          query: <String, dynamic>{'page': 1, 'page_size': 1},
+        );
+        final Map<String, dynamic> envelope = body as Map<String, dynamic>;
+
+        for (final String key in <String>['total', 'page', 'page_size', 'items']) {
+          expect(envelope.containsKey(key), isTrue, reason: '分页信封缺了 $key');
+        }
+
+        final List<dynamic> items = envelope['items'] as List<dynamic>;
+        if (items.isEmpty) {
+          markTestSkipped('数据库里当前没有帖子，条目字段未验证');
+          return;
+        }
+        final Map<String, dynamic> item = items.first as Map<String, dynamic>;
+
+        for (final String key in <String>[
+          'id',
+          'title',
+          'summary',
+          'category_name',
+          'author',
+          'like_count',
+          'comment_count',
+          'created_at',
+        ]) {
+          expect(item.containsKey(key), isTrue, reason: '帖子条目缺了 $key，字段名可能已漂移');
+        }
+
+        // 列表**不该**带正文：带上就等于每翻一页都搬一遍全文
+        expect(item.containsKey('content'), isFalse, reason: '列表项不应包含正文');
+
+        // 作者只暴露署名，不暴露 username —— 用户名是登录凭据的一半
+        final Map<String, dynamic> author = item['author'] as Map<String, dynamic>;
+        expect(author.containsKey('name'), isTrue);
+        expect(author.containsKey('username'), isFalse);
+        expect(
+          hasKey(envelope, 'username'),
+          isFalse,
+          reason: '响应里出现了 username，登录名被挂到公开接口上了',
+        );
+      });
+
+      test('列表项只有摘要，没有正文', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final PostItem item = (await posts.fetchPosts()).items.first;
+
+        expect(item.summary, isNotEmpty);
+        expect(item.hasContent, isFalse, reason: '列表项不该带正文');
+      });
+
+      test('详情能取到正文，标题与列表一致', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final PostItem listed = (await posts.fetchPosts()).items.first;
+        final PostItem detail = await posts.fetchPostDetail(listed.id);
+
+        expect(detail.id, listed.id);
+        expect(detail.title, listed.title);
+        expect(detail.hasContent, isTrue, reason: '详情接口必须返回正文');
+        expect(detail.authorName, listed.authorName);
+      });
+
+      test('created_at 按 UTC 解释，不会偏出几个小时', () async {
+        // 与浏览历史、知识列表同一个坑：后端存 naive UTC，
+        // 序列化不带 Z，客户端当成本地时间就会整体偏 8 小时。
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final PostItem item = (await posts.fetchPosts()).items.first;
+
+        expect(item.createdAt, isNotNull);
+        expect(
+          DateTime.now().difference(item.createdAt!).inMinutes.abs(),
+          lessThan(60 * 24 * 365),
+          reason: '时间戳解析成了 1970 年之类，说明格式对不上',
+        );
+      });
+
+      test('帖子不存在或已隐藏时是 404，提示可读', () async {
+        await expectLater(
+          posts.fetchPostDetail(999999),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 404)
+                .having((ApiException e) => e.message, 'message', '帖子不存在或已删除'),
+          ),
+        );
+      });
+
+      test('分页参数被服务端接受，total 不受分页影响', () async {
+        final PagedResult<PostItem> whole = await posts.fetchPosts();
+        final PagedResult<PostItem> one = await posts.fetchPosts(page: 1, pageSize: 1);
+
+        expect(one.total, whole.total, reason: 'total 是总数，不该被 page_size 改变');
+        expect(one.items.length, lessThanOrEqualTo(1));
+      });
+
+      test('按分类与关键词筛选不发 500', () async {
+        // 只验「服务端接得住这两个参数」。具体筛出什么取决于库里有什么，
+        // 拿它断言等于把测试绑死在当前数据上。
+        await posts.fetchPosts(categoryId: 1);
+        await posts.fetchPosts(keyword: '安全');
+        await posts.fetchPosts(categoryId: 1, keyword: '安全');
+      });
+    },
+    skip: enabled
+        ? false
+        : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
+  );
+}
+
+/// 递归找 JSON 里有没有某个 key。
+///
+/// 用于「这个字段**不该**出现在响应里」这类断言（例如 `username`）：
+/// 直接对原始响应文本做子串匹配会被编码和转义坑到，
+/// 走已解析的结构更稳，也不会因为某个字段名里恰好含这几个字母而误报。
+bool hasKey(Object? node, String key) {
+  if (node is Map) {
+    return node.containsKey(key) ||
+        node.values.any((Object? value) => hasKey(value, key));
+  }
+  if (node is List) {
+    return node.any((Object? value) => hasKey(value, key));
+  }
+  return false;
 }
 
 /// 调一次登录，把失败原因取出来。

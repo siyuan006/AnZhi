@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
-import '../core/sample_data.dart';
 import '../models/knowledge_item.dart';
 import '../models/paged_result.dart';
+import '../models/post_item.dart';
 import '../services/api_client.dart';
 import '../services/knowledge_api.dart';
+import '../services/post_api.dart';
 import '../widgets/async_status.dart';
 import '../widgets/category_grid.dart';
 import '../widgets/knowledge_tile.dart';
@@ -23,19 +24,23 @@ import 'knowledge_detail_page.dart';
 ///   - 今日安全知识 / 推荐知识：`GET /api/knowledge`（取最新 5 条）
 ///   - 安全分类：本地常量 `kCategories`，与数据库种子数据一致
 ///     （图标与配色无法由 JSON 表达，故保留在客户端）
-///   - 社区精选：仍为占位数据，社区接口属阶段 12
+///   - 社区精选：`GET /api/posts`（阶段 12a 起接真实数据）
 ///
 /// ⚠️ 尚未实现：`GET /api/home` 聚合接口（docs/API.md 第 9 节）。
 /// 该接口能减少客户端请求数，但属于优化项而非阶段 7 的必需项，
 /// 因此暂由本页直接调用知识列表接口，待阶段 13（个性化）一并实现。
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.onNavigateToTab, this.api});
+  const HomePage({super.key, this.onNavigateToTab, this.api, this.postApi});
 
   /// 请求切换到其他底部标签（如点击 AI 入口跳到 AI 页）
   final void Function(int index)? onNavigateToTab;
 
   /// 允许注入，便于测试用假客户端替换真实网络
   final KnowledgeApi? api;
+
+  /// 社区精选用。与 [api] 分开注入：两者是不同模块，
+  /// 其中一个挂了不该让另一个的测试也跟着难写。
+  final PostApi? postApi;
 
   /// 底部导航索引：AI = 1，知识 = 2，社区 = 3
   static const int _tabAi = 1;
@@ -50,12 +55,24 @@ class _HomePageState extends State<HomePage> {
   late final KnowledgeApi _api = widget.api ?? KnowledgeApi();
   late final bool _ownsApi = widget.api == null;
 
+  late final PostApi _postApi = widget.postApi ?? PostApi();
+  late final bool _ownsPostApi = widget.postApi == null;
+
   /// 首页只需要「今日 1 条 + 推荐 4 条」，多取一条留出余量
   static const int _fetchSize = 5;
 
   bool _loading = true;
   String? _error;
   List<KnowledgeItem> _items = const <KnowledgeItem>[];
+
+  /// 社区精选。与知识分开记录状态：它是首页的次要模块，
+  /// 拉不到时只在这一小块说明，不该让整个首页变成错误页。
+  bool _postsLoading = true;
+  bool _postsFailed = false;
+  List<PostItem> _posts = const <PostItem>[];
+
+  /// 首页的社区精选只露几条，点「进入社区」看全部
+  static const int _previewPostCount = 3;
 
   @override
   void initState() {
@@ -66,6 +83,7 @@ class _HomePageState extends State<HomePage> {
   @override
   void dispose() {
     if (_ownsApi) _api.dispose();
+    if (_ownsPostApi) _postApi.dispose();
     super.dispose();
   }
 
@@ -94,6 +112,36 @@ class _HomePageState extends State<HomePage> {
         _loading = false;
         _error = error.message;
         _items = const <KnowledgeItem>[];
+      });
+    }
+
+    await _loadPosts();
+  }
+
+  /// 拉社区精选。
+  ///
+  /// **失败不写进 `_error`。** 知识才是首页的主体，社区精选是末尾的
+  /// 一小块 —— 让它把整页变成错误页是本末倒置。这里单独记一个标志，
+  /// 只影响那一块，并如实说明拉不到而不是显示空。
+  Future<void> _loadPosts() async {
+    if (mounted) setState(() => _postsLoading = true);
+
+    try {
+      final PagedResult<PostItem> result = await _postApi.fetchPosts(
+        pageSize: _previewPostCount,
+      );
+      if (!mounted) return;
+      setState(() {
+        _postsLoading = false;
+        _postsFailed = false;
+        _posts = result.items;
+      });
+    } on ApiException {
+      if (!mounted) return;
+      setState(() {
+        _postsLoading = false;
+        _postsFailed = true;
+        _posts = const <PostItem>[];
       });
     }
   }
@@ -147,7 +195,9 @@ class _HomePageState extends State<HomePage> {
                 onAction: () => _goTo(HomePage._tabCommunity),
               ),
               _CommunityPreview(
-                posts: kSampleFeaturedPosts,
+                posts: _posts,
+                loading: _postsLoading,
+                failed: _postsFailed,
                 onTap: () => _goTo(HomePage._tabCommunity),
               ),
             ],
@@ -494,24 +544,57 @@ class _AiEntryCard extends StatelessWidget {
 }
 
 // ---------------------------------------------------------------------------
-// ⑤ 社区精选
-// ---------------------------------------------------------------------------
-
-/// ⚠️ 数据来源仍为 `core/sample_data.dart` 占位帖子。
-/// 社区接口（`GET /api/posts`）属阶段 12，届时一并接真实数据。
+/// 社区精选。
+///
+/// 数据来源 `GET /api/posts`（阶段 12a）。三种「没有内容」的情况
+/// 必须分开说，但都只占这一小块 —— 社区是首页末尾的次要模块，
+/// 不该因为它拉不到就把整个首页变成错误页：
+///   · 加载中 → 一行转圈
+///   · 拉不到 → 说明拉不到（**不是**「还没有人发帖」）
+///   · 确实没有 → 「还没有人发帖」
 class _CommunityPreview extends StatelessWidget {
-  const _CommunityPreview({required this.posts, this.onTap});
+  const _CommunityPreview({
+    required this.posts,
+    required this.loading,
+    required this.failed,
+    this.onTap,
+  });
 
-  final List<SamplePost> posts;
+  final List<PostItem> posts;
+  final bool loading;
+  final bool failed;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
 
+    if (loading) {
+      return const Padding(
+        padding: EdgeInsets.symmetric(vertical: 18),
+        child: Center(
+          child: SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2.2),
+          ),
+        ),
+      );
+    }
+
+    if (posts.isEmpty) {
+      return _CommunityNotice(
+        icon: failed ? Icons.cloud_off_rounded : Icons.forum_outlined,
+        // 拉不到就老实说拉不到。写成「还没有人发帖」是在骗人 ——
+        // 用户会以为社区是空的，实际是后端没连上。
+        text: failed ? '社区内容暂时加载不出来' : '还没有人发帖，去发第一条吧',
+        onTap: onTap,
+      );
+    }
+
     return Column(
       children: <Widget>[
-        for (final SamplePost post in posts)
+        for (final PostItem post in posts)
           Padding(
             padding: const EdgeInsets.only(bottom: kCardGap),
             child: Material(
@@ -544,11 +627,14 @@ class _CommunityPreview extends StatelessWidget {
                             color: theme.colorScheme.outline,
                           ),
                           const SizedBox(width: 3),
-                          Text(
-                            post.author,
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              color: theme.colorScheme.outline,
+                          Flexible(
+                            child: Text(
+                              post.authorName,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                color: theme.colorScheme.outline,
+                              ),
                             ),
                           ),
                           const SizedBox(width: 12),
@@ -588,6 +674,52 @@ class _CommunityPreview extends StatelessWidget {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// 社区精选没有内容时的一行说明（加载中 / 拉不到 / 确实为空共用）
+class _CommunityNotice extends StatelessWidget {
+  const _CommunityNotice({
+    required this.icon,
+    required this.text,
+    this.onTap,
+  });
+
+  final IconData icon;
+  final String text;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return Material(
+      color: kSurfaceColor,
+      borderRadius: BorderRadius.circular(kCardRadius),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(kCardRadius),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 20),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(icon, size: 17, color: theme.colorScheme.outline),
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  text,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }

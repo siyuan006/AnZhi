@@ -19,6 +19,10 @@ void main() {
   Widget wrap(FakeBackend backend, {List<int>? tabs}) => MaterialApp(
         home: HomePage(
           api: backend.api(),
+          // 社区精选也接上假后端。不注入的话它会去发真实请求，
+          // 而 flutter_test 会拦掉 —— 那样测到的是失败分支，
+          // 不是我们想验的那一条。
+          postApi: backend.postApi(),
           onNavigateToTab: tabs?.add,
         ),
       );
@@ -46,7 +50,10 @@ void main() {
       await tester.pumpWidget(wrap(backend));
       await tester.pumpAndSettle();
 
-      final Uri sent = backend.requests.single;
+      // 阶段 12a 起首页会发两条请求（知识 + 社区精选），
+      // 因此这里要挑出知识那条，而不是拿 requests.single
+      final Uri sent = backend.requests
+          .firstWhere((Uri url) => url.path == '/api/knowledge');
       expect(int.parse(sent.queryParameters['page_size']!), lessThanOrEqualTo(10));
     });
   });
@@ -122,6 +129,53 @@ void main() {
 
       // AI 页在底部导航中的索引为 1
       expect(tabs, <int>[1]);
+    });
+  });
+
+  group('社区精选（阶段 12a 接真实数据）', () {
+    testWidgets('显示后端返回的帖子', (WidgetTester tester) async {
+      await useTallWindow(tester);
+
+      await tester.pumpWidget(wrap(FakeBackend()));
+      await tester.pumpAndSettle();
+
+      expect(find.text('社区精选'), findsOneWidget);
+      expect(find.text('宿舍用电的几点提醒'), findsOneWidget);
+      expect(find.text('小艾'), findsOneWidget);
+    });
+
+    testWidgets('还没人发帖时如实说明', (WidgetTester tester) async {
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend()..seedNoPosts();
+
+      await tester.pumpWidget(wrap(backend));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('还没有人发帖'), findsOneWidget);
+    });
+
+    testWidgets('社区拉不到时只说这一块，首页其余部分照常', (WidgetTester tester) async {
+      // 知识才是首页的主体。社区精选是末尾的一小块 ——
+      // 让它把整页变成错误页是本末倒置。
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: HomePage(
+            api: backend.api(),
+            // 一个永远连不上的社区接口
+            postApi: (FakeBackend()..offline = true).postApi(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('社区内容暂时加载不出来'), findsOneWidget);
+      // 关键：不能滑成「还没有人发帖」——那是骗人
+      expect(find.textContaining('还没有人发帖'), findsNothing);
+      // 知识部分不受影响
+      expect(find.text('今日安全知识'), findsOneWidget);
     });
   });
 }

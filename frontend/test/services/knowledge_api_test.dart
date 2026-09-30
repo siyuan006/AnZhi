@@ -22,6 +22,21 @@ void main() {
       expect(result.items.first.categoryName, '消防安全');
     });
 
+    test('created_at 是 naive UTC，解析后不会偏几个小时', () async {
+      // 后端全项目统一存 naive UTC，序列化出来不带 Z。
+      // DateTime.parse 遇到这种字符串会当成本地时间，UTC+8 下偏 8 小时。
+      // 收藏、浏览历史、帖子都已改用 parseServerTime，这里是最后一处 ——
+      // 改回 DateTime.tryParse 这条会红。
+      final PagedResult<KnowledgeItem> result =
+          await FakeBackend().api().fetchKnowledge();
+      final KnowledgeItem item = result.items.first;
+
+      expect(item.createdAt, isNotNull);
+      expect(item.createdAt!.isUtc, isFalse, reason: '对外应是本地时间');
+      // 假后端这条是 2026-09-30T10:00:00（UTC），换回 UTC 必须还是 10 点
+      expect(item.createdAt!.toUtc().hour, 10);
+    });
+
     test('筛选条件发给服务端而不是本地过滤', () async {
       final FakeBackend backend = FakeBackend();
 
