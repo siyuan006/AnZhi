@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.database.init_db import seed_categories
-from app.models import Knowledge, User
+from app.models import Comment, Knowledge, Post, User
 
 
 def prepare_categories(db: Session) -> None:
@@ -41,3 +41,25 @@ def make_knowledge(**overrides: object) -> Knowledge:
     }
     payload.update(overrides)
     return Knowledge(**payload)  # type: ignore[arg-type]
+
+
+def make_post(**overrides: object) -> Post:
+    """构造一个社区帖子。"""
+    payload: dict[str, object] = {
+        "user_id": 1,
+        "title": "宿舍用电的几点提醒",
+        "content": "不要在一个插排上同时接大功率电器……",
+    }
+    payload.update(overrides)
+    return Post(**payload)  # type: ignore[arg-type]
+
+
+def make_comment(**overrides: object) -> Comment:
+    """构造一条评论。"""
+    payload: dict[str, object] = {
+        "post_id": 1,
+        "user_id": 1,
+        "content": "补充一点：充电器长期插着也会发热。",
+    }
+    payload.update(overrides)
+    return Comment(**payload)  # type: ignore[arg-type]

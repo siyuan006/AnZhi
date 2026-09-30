@@ -6,23 +6,31 @@
 
     第 1 批（阶段 6-1）✅  User / Category / Knowledge
     第 2 批（阶段 6-2）✅  Favorite / History
-    第 3 批（阶段 6-3）⬜  Post / Comment / Like / UserSettings
+    第 3 批（阶段 6-3）✅  Post / Comment / Like / UserSettings
 
 用一个地方集中导入所有模型，保证 `Base.metadata` 拿到完整的表定义 ——
 `create_all` 只能看到已经被导入的模型。
 """
 
 from app.models.category import Category
+from app.models.comment import Comment
 from app.models.favorite import Favorite
 from app.models.history import History
 from app.models.knowledge import Knowledge, RISK_LEVELS
+from app.models.like import Like
+from app.models.post import Post
 from app.models.user import User
+from app.models.user_settings import UserSettings
 
 __all__ = [
     "Category",
+    "Comment",
     "Favorite",
     "History",
     "Knowledge",
+    "Like",
+    "Post",
     "RISK_LEVELS",
     "User",
+    "UserSettings",
 ]

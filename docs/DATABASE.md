@@ -241,7 +241,7 @@ V1.0 固定六个分类，初始化时写入种子数据。
 ```text
 第 1 批（阶段6-1）✅  User ── Category ── Knowledge
 第 2 批（阶段6-2）✅  Favorite ── History
-第 3 批（阶段6-3）⬜  Post ── Comment ── Like ── UserSettings
+第 3 批（阶段6-3）✅  Post ── Comment ── Like ── UserSettings
 ```
 
 **不要一次性创建全部表。**
