@@ -19,6 +19,7 @@ class KnowledgeItem {
     this.source,
     this.author,
     this.viewCount = 0,
+    this.isFavorited = false,
     this.createdAt,
   });
 
@@ -37,6 +38,15 @@ class KnowledgeItem {
   final String? source;
   final String? author;
   final int viewCount;
+
+  /// 当前登录用户是否收藏了这一条。
+  ///
+  /// 由详情接口随身份返回；**未登录时恒为 `false`** ——
+  /// 「没收藏」和「不知道是谁」在这个字段上是同一个值，
+  /// 因此界面不能只看它来决定要不要显示收藏按钮，
+  /// 还要看当前有没有登录。
+  final bool isFavorited;
+
   final DateTime? createdAt;
 
   /// 所属分类，找不到时返回 `null`
@@ -47,9 +57,9 @@ class KnowledgeItem {
 
   /// 复制一份并覆盖部分字段。
   ///
-  /// 目前只有一个用途：详情页拿到正文后，再异步取回最新浏览量，
-  /// 需要在不重新请求整条内容的前提下更新计数。
-  KnowledgeItem copyWith({int? viewCount}) {
+  /// 两个用途：详情页拿到正文后异步取回最新浏览量；点收藏按钮后
+  /// 在不重新请求整条内容的前提下更新收藏状态。
+  KnowledgeItem copyWith({int? viewCount, bool? isFavorited}) {
     return KnowledgeItem(
       id: id,
       title: title,
@@ -61,6 +71,7 @@ class KnowledgeItem {
       source: source,
       author: author,
       viewCount: viewCount ?? this.viewCount,
+      isFavorited: isFavorited ?? this.isFavorited,
       createdAt: createdAt,
     );
   }
@@ -80,6 +91,7 @@ class KnowledgeItem {
       source: json['source'] as String?,
       author: json['author'] as String?,
       viewCount: (json['view_count'] as num?)?.toInt() ?? 0,
+      isFavorited: json['is_favorited'] as bool? ?? false,
       createdAt: DateTime.tryParse(json['created_at'] as String? ?? ''),
     );
   }
@@ -95,6 +107,7 @@ class KnowledgeItem {
         'source': source,
         'author': author,
         'view_count': viewCount,
+        'is_favorited': isFavorited,
         'created_at': createdAt?.toIso8601String(),
       };
 }

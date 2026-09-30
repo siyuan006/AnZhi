@@ -10,7 +10,9 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
+from app.api.deps import get_optional_user
 from app.database.session import get_db
+from app.models.user import User
 from app.schemas.common import Page
 from app.schemas.knowledge import (
     CategoryOut,
@@ -18,7 +20,7 @@ from app.schemas.knowledge import (
     KnowledgeListItem,
     ViewCountOut,
 )
-from app.services.knowledge import knowledge_service
+from app.services.knowledge import favorite_service, knowledge_service
 
 router = APIRouter(tags=["知识系统"])
 
@@ -81,6 +83,7 @@ def list_knowledge(
 )
 def get_knowledge(
     knowledge_id: int,
+    user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ) -> KnowledgeDetail:
     """返回知识详情。
@@ -88,10 +91,14 @@ def get_knowledge(
     **本接口不累加浏览量**，也不会写入浏览历史 —— 它是一个纯读接口。
     计数由客户端在用户真正打开详情页时调用 `POST /api/knowledge/{id}/view`。
 
+    带有效 token 时会在响应里带上 `is_favorited`，供详情页把收藏按钮
+    初始化成正确的状态；匿名访问照常返回 200，`is_favorited` 恒为 False。
+    **匿名仍然能读到全部内容** —— 这是刻意的（docs/API.md 第 11 节）：
+    安知是安全科普应用，用户可能在起火、有人触电的当口打开它。
+
     尚未实现（按阶段推进，不做假实现）：
 
-    - **写入浏览历史**：浏览历史必须归属到具体用户，而登录体系属于阶段 11。
-      在此之前没有可靠的 user_id 可写，因此不写 —— 阶段 11 补上。
+    - **写入浏览历史**：见阶段 11c。
     """
     item = knowledge_service.get_knowledge(db, knowledge_id)
     if item is None:
@@ -99,7 +106,15 @@ def get_knowledge(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="知识不存在或未发布",
         )
-    return KnowledgeDetail.from_model(item)
+
+    return KnowledgeDetail.from_model(
+        item,
+        is_favorited=favorite_service.is_favorited(
+            db,
+            user_id=user.id if user else None,
+            knowledge_id=knowledge_id,
+        ),
+    )
 
 
 @router.post(

@@ -5,6 +5,7 @@ import '../models/auth_user.dart';
 import '../services/api_client.dart';
 import '../services/auth_api.dart';
 import '../services/auth_store.dart';
+import '../services/favorite_api.dart';
 
 /// 安知 —— 登录状态
 ///
@@ -31,17 +32,34 @@ class AuthController extends ChangeNotifier {
   }) : _store = store ?? MemoryAuthStore() {
     // 在这里而不是初始化列表里构造：token 回调要读 `_token`，
     // 而初始化列表阶段还访问不到 this。
-    _api = AuthApi(
-      client: ApiClient(
-        httpClient: httpClient,
-        baseUrl: baseUrl,
-        token: () => _token,
-      ),
+    _client = ApiClient(
+      httpClient: httpClient,
+      baseUrl: baseUrl,
+      token: () => _token,
     );
+    _api = AuthApi(client: _client);
   }
 
   final AuthStore _store;
+  late final ApiClient _client;
   late final AuthApi _api;
+
+  /// 收藏接口，已经接好鉴权头。
+  ///
+  /// 由本类统一持有，**页面不要自己造一个** —— 见下面 [apiClient] 的说明。
+  /// 收藏是「这份数据属于谁」的接口，用匿名客户端去调只会拿到 401。
+  late final FavoriteApi favoriteApi = FavoriteApi(client: _client);
+
+  /// 已接好鉴权头的底层客户端，供其它需要登录态的接口复用。
+  ///
+  /// 收藏、浏览历史这类接口都以「当前是谁」为前提，各自新建一个匿名
+  /// 客户端只会拿到 401 —— 而且看起来完全像是后端的毛病。
+  ///
+  /// ⚠️ **借用方不要 `close()` 它。** 它归本对象所有，[dispose] 时统一关闭。
+  /// 共用一个 client 时，任何一方 close 都会让另一方莫名其妙地
+  /// 「连不上服务器」——`test/integration/live_backend_test.dart` 里
+  /// 特意为每个接口单独建 client，就是为了躲开这个坑。
+  ApiClient get apiClient => _client;
 
   AuthUser? _user;
   String? _token;

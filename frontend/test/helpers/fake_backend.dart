@@ -5,6 +5,7 @@ import 'package:anzhi/services/api_client.dart';
 import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/auth_store.dart';
 import 'package:anzhi/services/chat_api.dart';
+import 'package:anzhi/services/favorite_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -33,6 +34,13 @@ class FakeBackend {
 
   /// 设为 true 时模拟「连不上服务器」
   bool offline = false;
+
+  /// 设为非空时，收藏接口一律返回该状态码。
+  ///
+  /// 收藏失败是一条**必须被看见**的路径：图标不许自己翻过去，
+  /// 用户得知道这一下没生效。
+  int? favoriteErrorStatus;
+  String favoriteErrorMessage = '收藏失败，请稍后再试';
 
   /// 非 2xx 响应
   int? errorStatus;
@@ -156,10 +164,25 @@ class FakeBackend {
   ///
   /// 注入底层 http 客户端而不是 AuthApi：token 的接线由
   /// AuthController 自己负责，测试不必（也不应该）替它接一遍。
+  ///
+  /// 页面里的收藏接口是从 `AuthScope` 上取的 `authController.favoriteApi`，
+  /// 因此注入这一个对象就同时打通了登录与收藏两条链路。
   AuthController authController({AuthStore? store}) => AuthController(
         httpClient: httpClient,
         baseUrl: 'http://test.local',
         store: store ?? MemoryAuthStore(),
+      );
+
+  /// 收藏接口（需要调用方自己给出 token 回调）。
+  ///
+  /// 页面测试一般不需要它 —— 那些用的是 `authController().favoriteApi`。
+  /// 这个留给只测 `FavoriteApi` 本身的用例。
+  FavoriteApi favoriteApi({String? Function()? token}) => FavoriteApi(
+        client: ApiClient(
+          httpClient: httpClient,
+          baseUrl: 'http://test.local',
+          token: token,
+        ),
       );
 
   /// 预置一个已注册的账号
@@ -171,6 +194,19 @@ class FakeBackend {
 
   /// 用户名 -> 昵称
   final Map<String, String?> nicknames = <String, String?>{};
+
+  // --- 收藏（/api/favorites）----------------------------------------------
+
+  /// 用户名 -> 已收藏的知识 id，**按收藏先后**排列（最新的在最后）。
+  /// 与真实后端一样，收藏是跟着账号走的 ——
+  /// 「A 看不到 B 的收藏」这条必须在假后端里也成立，
+  /// 否则页面测试就验不出越权读取。
+  final Map<String, List<int>> favorites = <String, List<int>>{};
+
+  /// 预置一条收藏（测试里直接构造「已经收藏过」的状态）
+  void seedFavorite(String username, int knowledgeId) {
+    favorites.putIfAbsent(username, () => <int>[]).add(knowledgeId);
+  }
 
   Map<String, dynamic> _userJson(String username) => <String, dynamic>{
         'id': _idFor(username),
@@ -224,6 +260,10 @@ class FakeBackend {
       return _handleAuth(request, path);
     }
 
+    if (path == '/api/favorites' || path.startsWith('/api/favorites/')) {
+      return _handleFavorites(request, path);
+    }
+
     if (path == '/api/knowledge') {
       return _json(_filtered(request.url.queryParameters), 200);
     }
@@ -245,6 +285,7 @@ class FakeBackend {
     if (path.startsWith('/api/knowledge/')) {
       final String rawId = path.substring('/api/knowledge/'.length);
       final int? id = int.tryParse(rawId);
+      final String? viewer = _usernameFromHeader(request);
       for (final Map<String, dynamic> item in items) {
         if (item['id'] == id) {
           return _json(<String, dynamic>{
@@ -255,6 +296,9 @@ class FakeBackend {
             'source': item['source'],
             'author': item['author'],
             'view_count': viewCounts[id] ?? 0,
+            // 收藏状态**按人算**：匿名访问恒为 false
+            'is_favorited': viewer != null &&
+                (favorites[viewer] ?? const <int>[]).contains(id),
           }, 200);
         }
       }
@@ -322,6 +366,98 @@ class FakeBackend {
     }
 
     return _json(<String, dynamic>{'detail': '接口不存在'}, 404);
+  }
+
+  /// 收藏相关的响应。
+  ///
+  /// 复述了后端的两个关键约定：
+  ///   - 未登录一律 401「请先登录」
+  ///   - 收藏与取消都是**幂等**的（已收藏时 POST 返回 200 而不是 201，
+  ///     取消一条本来就没收藏的也返回 204）
+  ///
+  /// 假后端如果不照做，页面里依赖幂等性的分支就永远测不到。
+  Future<http.Response> _handleFavorites(
+    http.Request request,
+    String path,
+  ) async {
+    if (favoriteErrorStatus != null) {
+      return _json(
+        <String, dynamic>{'detail': favoriteErrorMessage},
+        favoriteErrorStatus!,
+      );
+    }
+
+    final String? username = _usernameFromHeader(request);
+    if (username == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    final List<int> ids = favorites.putIfAbsent(username, () => <int>[]);
+
+    if (path == '/api/favorites') {
+      if (request.method == 'POST') {
+        final int? id = (_body(request)['knowledge_id'] as num?)?.toInt();
+        if (id == null || !_exists(id)) {
+          return _json(<String, dynamic>{'detail': '知识不存在或未发布'}, 404);
+        }
+        if (ids.contains(id)) {
+          return _json(_favoriteRecordJson(username, id), 200);
+        }
+        ids.add(id);
+        return _json(_favoriteRecordJson(username, id), 201);
+      }
+      return _json(_favoritePage(username, request.url.queryParameters), 200);
+    }
+
+    // DELETE /api/favorites/{knowledge_id}
+    final int? id = int.tryParse(path.substring('/api/favorites/'.length));
+    if (id != null) ids.remove(id);
+    return http.Response('', 204);
+  }
+
+  /// 与真实后端一致：POST 只回收藏记录本身，不带嵌套知识
+  Map<String, dynamic> _favoriteRecordJson(String username, int knowledgeId) {
+    final List<int> ids = favorites[username] ?? const <int>[];
+    return <String, dynamic>{
+      'id': ids.indexOf(knowledgeId) + 1,
+      'knowledge_id': knowledgeId,
+      'created_at': '2026-09-30T12:00:00',
+    };
+  }
+
+  /// 列表则**带上嵌套知识**，否则客户端每行都得多发一次详情请求。
+  /// 同时只返回仍然存在的条目 —— 与后端的 INNER JOIN 过滤对应。
+  Map<String, dynamic> _favoritePage(
+    String username,
+    Map<String, String> query,
+  ) {
+    // 最新的排在前面
+    final List<int> visible = (favorites[username] ?? const <int>[])
+        .reversed
+        .where(_exists)
+        .toList(growable: false);
+
+    final int page = int.tryParse(query['page'] ?? '1') ?? 1;
+    final int pageSize = int.tryParse(query['page_size'] ?? '20') ?? 20;
+    final int start = (page - 1) * pageSize;
+    final List<int> slice = start >= visible.length
+        ? const <int>[]
+        : visible.sublist(start, (start + pageSize).clamp(0, visible.length));
+
+    return <String, dynamic>{
+      'total': visible.length,
+      'page': page,
+      'page_size': pageSize,
+      'items': <Map<String, dynamic>>[
+        for (final int id in slice)
+          <String, dynamic>{
+            ..._favoriteRecordJson(username, id),
+            'knowledge': items.firstWhere(
+              (Map<String, dynamic> item) => item['id'] == id,
+            ),
+          },
+      ],
+    };
   }
 
   Map<String, dynamic> _sessionJson(String username) => <String, dynamic>{

@@ -2,28 +2,35 @@ import 'package:flutter/material.dart';
 
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
+import '../core/auth_controller.dart';
 import '../models/knowledge_item.dart';
 import '../services/api_client.dart';
+import '../services/favorite_api.dart';
 import '../services/knowledge_api.dart';
 import '../widgets/async_status.dart';
 import '../widgets/risk_badge.dart';
+import 'login_page.dart';
 
-/// 安知 —— 知识详情页（阶段 10）
+/// 安知 —— 知识详情页（阶段 10 / 阶段 11b 加收藏）
 ///
 /// 链路：`GET /api/knowledge/{id}` → 正文；打开后另发一次
-/// `POST /api/knowledge/{id}/view` 记一次浏览。
+/// `POST /api/knowledge/{id}/view` 记一次浏览；右上角收藏按钮走
+/// `POST / DELETE /api/favorites`。
 ///
-/// 两个接口分开是刻意的：读详情是幂等的，计数是一次写操作。
-/// 若把计数塞进详情接口，浏览器的预取、失败重试、爬虫都会各算一次浏览。
+/// 浏览计数与详情**分成两个接口**是刻意的：读详情是幂等的，
+/// 计数是一次写操作。若把计数塞进详情接口，浏览器的预取、
+/// 失败重试、爬虫都会各算一次浏览。
 ///
-/// ⚠️ 尚未实现：收藏按钮（PROJECT_SPEC 第三十九节，阶段 11）。
-/// 这一版**不放一个点了没反应的收藏图标** —— 那比没有按钮更糟。
+/// 收藏状态则由详情接口顺带返回（`is_favorited`）——
+/// 详情页本来就要发这一个请求，把按钮的初始状态捎回来，
+/// 省掉一次往返。匿名访问时它恒为 `false`。
 class KnowledgeDetailPage extends StatefulWidget {
   const KnowledgeDetailPage({
     super.key,
     required this.knowledgeId,
     this.preview,
     this.api,
+    this.favoriteApi,
   });
 
   final int knowledgeId;
@@ -37,27 +44,59 @@ class KnowledgeDetailPage extends StatefulWidget {
   /// 允许注入，便于测试用假后端替换真实网络
   final KnowledgeApi? api;
 
+  /// 收藏接口。生产路径下从 [AuthScope] 取，测试时注入。
+  final FavoriteApi? favoriteApi;
+
   @override
   State<KnowledgeDetailPage> createState() => _KnowledgeDetailPageState();
 }
 
 class _KnowledgeDetailPageState extends State<KnowledgeDetailPage> {
-  late final KnowledgeApi _api = widget.api ?? KnowledgeApi();
-  late final bool _ownsApi = widget.api == null;
+  KnowledgeApi? _api;
+
+  /// 为 `null` 表示当前拿不到收藏接口（没有 AuthScope）。
+  /// 此时**不显示收藏按钮** —— 放一个点了没反应的图标比没有更糟。
+  FavoriteApi? _favorites;
+
+  /// 自建的匿名 client 要自己关；借用 `AuthController` 的则**不能关**
+  /// （那是它持有的 client，关了会波及所有共用它的页面）。
+  bool _ownsApi = false;
+  bool _started = false;
 
   KnowledgeItem? _item;
   String? _error;
   bool _loading = true;
+  bool _favoriteBusy = false;
 
   @override
-  void initState() {
-    super.initState();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // 只解析一次。放在这里而不是 initState：AuthScope 要通过 context 取，
+    // 而 initState 阶段还读不到 InheritedWidget。
+    if (_started) return;
+    _started = true;
+
+    final AuthController? auth = AuthScope.maybeOf(context);
+
+    if (widget.api != null) {
+      _api = widget.api;
+    } else if (auth != null) {
+      // 借用 AuthController 那个已接好鉴权头的客户端：详情接口要靠它
+      // 带上 token，才知道当前用户有没有收藏这一条。
+      _api = KnowledgeApi(client: auth.apiClient);
+    } else {
+      // 没有 AuthScope（单独 pump 这个页面）时退化成匿名请求
+      _api = KnowledgeApi();
+      _ownsApi = true;
+    }
+
+    _favorites = widget.favoriteApi ?? auth?.favoriteApi;
     _load();
   }
 
   @override
   void dispose() {
-    if (_ownsApi) _api.dispose();
+    if (_ownsApi) _api?.dispose();
     super.dispose();
   }
 
@@ -68,7 +107,8 @@ class _KnowledgeDetailPageState extends State<KnowledgeDetailPage> {
     });
 
     try {
-      final KnowledgeItem item = await _api.fetchKnowledgeDetail(widget.knowledgeId);
+      final KnowledgeItem item =
+          await _api!.fetchKnowledgeDetail(widget.knowledgeId);
       if (!mounted) return;
       setState(() {
         _item = item;
@@ -89,18 +129,119 @@ class _KnowledgeDetailPageState extends State<KnowledgeDetailPage> {
   /// 失败不提示：浏览量是锦上添花的数据，
   /// 让它把一次正常的阅读变成错误页是本末倒置。
   void _recordView() {
-    _api.recordView(widget.knowledgeId).then((int? count) {
+    _api!.recordView(widget.knowledgeId).then((int? count) {
       if (count == null || !mounted) return;
       setState(() => _item = _item?.copyWith(viewCount: count));
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // 收藏
+  // -------------------------------------------------------------------------
+
+  Future<void> _toggleFavorite() async {
+    if (_favoriteBusy || _item == null || _favorites == null) return;
+
+    final AuthController? auth = AuthScope.maybeOf(context);
+
+    if (auth?.isLoggedIn != true) {
+      final bool loggedIn = await _openLogin();
+      if (!loggedIn || !mounted) return;
+
+      // 登录后必须重新取一次详情：`is_favorited` 是**按人算**的，
+      // 登录前拿到的那个 false 只代表「不知道你是谁」，不能当依据。
+      await _load();
+      if (!mounted) return;
+
+      // 这个账号原来就收藏过 —— 用户想要的结果已经达成，不必再发一次请求。
+      if (_item?.isFavorited == true) return;
+      await _applyFavorite(true);
+      return;
+    }
+
+    await _applyFavorite(!(_item?.isFavorited ?? false));
+  }
+
+  /// 打开登录页，返回是否登录成功。
+  ///
+  /// 未登录时点收藏直接推登录页，而不是弹一句「请先登录」就没了 ——
+  /// 用户点这一下的意图是明确的，直接给他入口比让他自己回头找要顺手。
+  Future<bool> _openLogin() async {
+    final AuthController? auth = AuthScope.maybeOf(context);
+    if (auth == null) return false;
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+    );
+    return auth.isLoggedIn;
+  }
+
+  /// 真正发请求。
+  ///
+  /// **不做乐观更新**：先把图标翻过去、失败了再翻回来，用户会看到
+  /// 一个「明明点成功了却又自己变回去」的按钮，比等半秒更让人不安。
+  /// 这里如实等后端返回，期间按钮置灰。
+  Future<void> _applyFavorite(bool want) async {
+    final FavoriteApi api = _favorites!;
+    final int id = widget.knowledgeId;
+
+    setState(() => _favoriteBusy = true);
+    try {
+      if (want) {
+        await api.add(id);
+      } else {
+        await api.remove(id);
+      }
+      if (!mounted) return;
+      setState(() {
+        _favoriteBusy = false;
+        _item = _item?.copyWith(isFavorited: want);
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _favoriteBusy = false);
+      // 失败必须说出来。图标老老实实停在原来的状态，
+      // 不提示的话用户会以为收藏成功了。
+      _toast(error.message);
+    }
+  }
+
+  void _toast(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 3)),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBackgroundColor,
-      appBar: AppBar(title: const Text('知识详情')),
+      appBar: AppBar(
+        title: const Text('知识详情'),
+        actions: <Widget>[
+          // 正文加载出来之前不显示：`is_favorited` 还没到手，
+          // 先画一个「未收藏」的图标等于给了一个可能错的答案。
+          if (_item != null && _favorites != null) _buildFavoriteButton(),
+        ],
+      ),
       body: _buildBody(),
+    );
+  }
+
+  Widget _buildFavoriteButton() {
+    final bool favorited = _item?.isFavorited ?? false;
+    final ThemeData theme = Theme.of(context);
+
+    return IconButton(
+      onPressed: _favoriteBusy ? null : _toggleFavorite,
+      tooltip: favorited ? '取消收藏' : '收藏',
+      icon: Icon(
+        favorited ? Icons.bookmark_rounded : Icons.bookmark_border_rounded,
+      ),
+      color: favorited ? theme.colorScheme.primary : null,
     );
   }
 

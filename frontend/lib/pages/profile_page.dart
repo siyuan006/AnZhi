@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
 import '../core/auth_controller.dart';
+import 'favorites_page.dart';
 import 'login_page.dart';
 
 /// 安知 —— 我的页面
@@ -36,7 +37,7 @@ class ProfilePage extends StatelessWidget {
               _MenuItem(
                 icon: Icons.star_outline_rounded,
                 label: '我的收藏',
-                onTap: () => _openLoginFirst(context, '我的收藏'),
+                onTap: () => _openFavorites(context),
               ),
               _MenuItem(
                 icon: Icons.history_rounded,
@@ -95,17 +96,38 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
-  /// 收藏与历史都需要登录。
+  /// 打开「我的收藏」。
+  ///
+  /// 未登录时**先推登录页，登录成功就顺势把收藏页打开** ——
+  /// 用户点的是「我的收藏」，意图是明确的，不该让他回来再点一次。
+  Future<void> _openFavorites(BuildContext context) async {
+    final AuthController? auth = AuthScope.maybeOf(context);
+    if (auth == null) return;
+
+    if (!auth.isLoggedIn) {
+      await Navigator.of(context).push<void>(
+        MaterialPageRoute<void>(builder: (_) => const LoginPage()),
+      );
+      // 用户可能是直接返回、没登录就走了
+      if (!context.mounted || !auth.isLoggedIn) return;
+    }
+
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(builder: (_) => const FavoritesPage()),
+    );
+  }
+
+  /// 需要登录、但页面还没实现的入口。
   ///
   /// 未登录时**推登录页而不是弹一句「请先登录」** ——
-  /// 用户点了「我的收藏」，意图是明确的，此时直接给他登录入口
+  /// 用户点了这一项，意图是明确的，此时直接给他登录入口
   /// 比让他自己回头去找要顺手得多。
   Future<void> _openLoginFirst(BuildContext context, String feature) async {
     final AuthController? auth = AuthScope.maybeOf(context);
     if (auth == null) return;
 
     if (auth.isLoggedIn) {
-      // 收藏页 / 历史页属阶段 11 的后续提交，此时如实说明
+      // 浏览历史页属阶段 11c，此时如实说明，不做假页面
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('「$feature」页面即将在此版本的后续提交里接入'),

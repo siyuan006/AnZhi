@@ -60,15 +60,24 @@ class KnowledgeListItem(BaseModel):
 
 
 class KnowledgeDetail(KnowledgeListItem):
-    """知识详情（docs/API.md `GET /api/knowledge/{id}`）。"""
+    """知识详情（docs/API.md `GET /api/knowledge/{id}`）。
+
+    `is_favorited` 随请求身份变化：未登录时恒为 `False`。
+    放在详情响应里而不是单开一个查询接口，是因为详情页打开时
+    本来就要发这一个请求 —— 收藏按钮的初始状态顺路带回来，
+    省掉一次往返。
+    """
 
     content: str
     source: str | None = None
     author: str | None = None
     view_count: int = 0
+    is_favorited: bool = False
 
     @classmethod
-    def from_model(cls, item: Knowledge) -> "KnowledgeDetail":
+    def from_model(
+        cls, item: Knowledge, *, is_favorited: bool = False
+    ) -> "KnowledgeDetail":
         return cls(
             id=item.id,
             title=item.title,
@@ -82,6 +91,7 @@ class KnowledgeDetail(KnowledgeListItem):
             source=item.source,
             author=item.author,
             view_count=item.view_count,
+            is_favorited=is_favorited,
         )
 
 

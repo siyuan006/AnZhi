@@ -1,11 +1,13 @@
 import 'package:anzhi/core/app_constants.dart';
 import 'package:anzhi/models/ai_answer.dart';
 import 'package:anzhi/models/auth_user.dart';
+import 'package:anzhi/models/favorite_item.dart';
 import 'package:anzhi/models/knowledge_item.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/services/api_client.dart';
 import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/chat_api.dart';
+import 'package:anzhi/services/favorite_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -60,6 +62,29 @@ void main() {
     ),
   );
 
+  // 收藏同样用独立的 ApiClient，token 从同一个变量现取 ——
+  // 认证那一组跑完之后 `authToken` 就有值了。
+  final FavoriteApi favorites = FavoriteApi(
+    client: ApiClient(
+      baseUrl: baseUrl,
+      timeout: const Duration(seconds: 5),
+      token: () => authToken,
+    ),
+  );
+
+  /// **带登录身份**的知识接口，只用于 `is_favorited` 这类按人算的字段。
+  ///
+  /// 上面那个 `api` 是匿名客户端，拿它去查 `is_favorited` 永远是 false ——
+  /// 后端没有做错，是请求本身没有身份。这一点最初真的把这条测试跑挂过，
+  /// 因此特意保留这个独立的实例并写清楚它的用途。
+  final KnowledgeApi authedApi = KnowledgeApi(
+    client: ApiClient(
+      baseUrl: baseUrl,
+      timeout: const Duration(seconds: 5),
+      token: () => authToken,
+    ),
+  );
+
   /// 本次运行创建的账号名。
   ///
   /// **这些用例会在真实数据库里创建用户。** 名字带固定前缀便于事后清理，
@@ -73,6 +98,8 @@ void main() {
     api.dispose();
     chat.dispose();
     authApi.dispose();
+    favorites.dispose();
+    authedApi.dispose();
   });
 
   group(
@@ -372,6 +399,144 @@ void main() {
                 .having((ApiException e) => e.message, 'message', contains('汉字')),
           ),
         );
+      });
+    },
+    skip: enabled
+        ? false
+        : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
+  );
+
+  group(
+    '真实后端 · 收藏',
+    () {
+      test('未登录时三个接口都是 401 与「请先登录」', () async {
+        String? none;
+        final FavoriteApi anonymous = FavoriteApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => none),
+        );
+        addTearDown(anonymous.dispose);
+
+        for (final Future<void> Function() call in <Future<void> Function()>[
+          anonymous.fetchFavorites,
+          () => anonymous.add(1),
+          () => anonymous.remove(1),
+        ]) {
+          await expectLater(
+            call(),
+            throwsA(
+              isA<ApiException>()
+                  .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                  .having((ApiException e) => e.message, 'message', '请先登录'),
+            ),
+          );
+        }
+      });
+
+      test('收藏不存在的知识返回 404 与可读中文', () async {
+        await expectLater(
+          favorites.add(999999),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 404)
+                .having(
+                  (ApiException e) => e.message,
+                  'message',
+                  '知识不存在或未发布',
+                ),
+          ),
+        );
+      });
+
+      test('取消一条没收藏过的返回 204，而不是 404', () async {
+        // 幂等：用户要的是「这条不在我的收藏里」，这个状态已经成立了
+        await favorites.remove(999999);
+      });
+
+      test('收藏 → 列表 → 详情 → 取消，整条链路对得上', () async {
+        final PagedResult<KnowledgeItem> all = await api.fetchKnowledge();
+        if (all.items.isEmpty) {
+          // 知识库没有已发布内容时无法验证往返。**不假装通过** ——
+          // 这条断言的价值全靠真实数据，空跑一遍等于什么都没验。
+          markTestSkipped('知识库当前没有已发布内容，收藏往返未验证');
+          return;
+        }
+
+        final int id = all.items.first.id;
+        await favorites.remove(id); // 先清干净，保证起点确定
+
+        await favorites.add(id);
+
+        final PagedResult<FavoriteItem> page = await favorites.fetchFavorites();
+        expect(page.total, 1);
+        expect(page.items.single.knowledgeId, id);
+        // 嵌套知识的字段名一旦漂移，这里会立刻暴露 ——
+        // 假后端是按客户端预期写的，永远发现不了这类问题
+        expect(page.items.single.knowledge.title, isNotEmpty);
+        expect(page.items.single.knowledge.categoryName, isNot('未分类'));
+
+        expect((await authedApi.fetchKnowledgeDetail(id)).isFavorited, isTrue);
+
+        await favorites.remove(id);
+
+        expect((await favorites.fetchFavorites()).total, 0);
+        expect((await authedApi.fetchKnowledgeDetail(id)).isFavorited, isFalse);
+      });
+
+      test('重复收藏是幂等的，列表里仍然只有一条', () async {
+        final PagedResult<KnowledgeItem> all = await api.fetchKnowledge();
+        if (all.items.isEmpty) {
+          markTestSkipped('知识库当前没有已发布内容，幂等性未验证');
+          return;
+        }
+
+        final int id = all.items.first.id;
+        await favorites.remove(id);
+        await favorites.add(id);
+        await favorites.add(id);
+
+        expect((await favorites.fetchFavorites()).total, 1);
+
+        await favorites.remove(id);
+      });
+
+      test('详情接口的 is_favorited 按人算，不是「有没有人收藏过」', () async {
+        final PagedResult<KnowledgeItem> all = await api.fetchKnowledge();
+        if (all.items.isEmpty) {
+          markTestSkipped('知识库当前没有已发布内容，隔离性未验证');
+          return;
+        }
+
+        final int id = all.items.first.id;
+        await favorites.add(id);
+
+        // 换一个全新账号来看同一条
+        String? otherToken;
+        final AuthApi other = AuthApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => otherToken),
+        );
+        addTearDown(other.dispose);
+
+        final String name =
+            'lfav${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+        otherToken = (await other.register(
+          username: name,
+          password: accountPassword,
+        ))
+            .token;
+
+        final FavoriteApi otherFavorites = FavoriteApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => otherToken),
+        );
+        addTearDown(otherFavorites.dispose);
+
+        expect((await otherFavorites.fetchFavorites()).total, 0);
+        expect(
+          (await authedApi.fetchKnowledgeDetail(id)).isFavorited,
+          isTrue,
+          reason: '收藏者本人仍然看到已收藏',
+        );
+
+        await favorites.remove(id);
       });
     },
     skip: enabled

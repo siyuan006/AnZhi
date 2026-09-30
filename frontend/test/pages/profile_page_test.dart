@@ -1,4 +1,5 @@
 import 'package:anzhi/core/auth_controller.dart';
+import 'package:anzhi/pages/favorites_page.dart';
 import 'package:anzhi/pages/login_page.dart';
 import 'package:anzhi/pages/profile_page.dart';
 import 'package:flutter/material.dart';
@@ -50,6 +51,27 @@ void main() {
       expect(find.byType(LoginPage), findsOneWidget);
     });
 
+    testWidgets('登录成功后直接落在收藏页，不用再点一次「我的收藏」', (WidgetTester tester) async {
+      // 他点的是「我的收藏」。登录只是路上的一步，
+      // 登完还要他自己回来重按一次是没必要的
+      final FakeBackend backend = FakeBackend()
+        ..seedAccount('xiaoming', 'hunter2hunter2');
+      await pumpProfile(tester, backend);
+
+      await tester.tap(find.text('我的收藏'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, '用户名'), 'xiaoming');
+      await tester.enterText(
+        find.widgetWithText(TextField, '密码'),
+        'hunter2hunter2',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, '登录'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(FavoritesPage), findsOneWidget);
+    });
+
     testWidgets('点「浏览历史」同样打开登录页', (WidgetTester tester) async {
       await pumpProfile(tester, FakeBackend());
 
@@ -59,12 +81,13 @@ void main() {
       expect(find.byType(LoginPage), findsOneWidget);
     });
 
-    testWidgets('登录页里登录成功后，我的页面立刻变成已登录形态', (WidgetTester tester) async {
+    testWidgets('从页头登录后，我的页面立刻变成已登录形态', (WidgetTester tester) async {
       final FakeBackend backend = FakeBackend()
         ..seedAccount('xiaoming', 'hunter2hunter2');
       await pumpProfile(tester, backend);
 
-      await tester.tap(find.text('我的收藏'));
+      // 走页头的登录按钮：登录页弹回来之后仍然停在这一页
+      await tester.tap(find.widgetWithText(FilledButton, '登录'));
       await tester.pumpAndSettle();
 
       await tester.enterText(

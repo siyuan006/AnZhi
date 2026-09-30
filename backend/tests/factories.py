@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.database.init_db import seed_categories
-from app.models import Comment, Knowledge, Post, User
+from app.models import Comment, Favorite, Knowledge, Post, User
 
 
 def prepare_categories(db: Session) -> None:
@@ -66,8 +66,19 @@ def make_comment(**overrides: object) -> Comment:
 
 
 def create_knowledge(db: Session, **overrides: object) -> Knowledge:
-    """构造并**立即落库**一篇知识卡片，返回该对象。"""
+    """构造并**立即落库**一篇知识卡片，返回该对象。
+
+    注意 `is_published` 默认是 False（PROJECT_SPEC 第十五节），
+    想让它出现在对外接口里必须显式传 `is_published=True`。
+    """
     item = make_knowledge(**overrides)
     db.add(item)
     db.commit()
     return item
+
+
+def make_favorite(**overrides: object) -> Favorite:
+    """构造一条收藏记录。"""
+    payload: dict[str, object] = {"user_id": 1, "knowledge_id": 1}
+    payload.update(overrides)
+    return Favorite(**payload)  # type: ignore[arg-type]
