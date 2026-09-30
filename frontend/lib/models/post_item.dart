@@ -1,5 +1,6 @@
 import '../core/app_constants.dart';
 import '../core/relative_time.dart';
+import 'like_state.dart';
 
 /// 安知 —— 社区帖子数据模型
 ///
@@ -53,6 +54,7 @@ class PostItem {
     this.author,
     this.likeCount = 0,
     this.commentCount = 0,
+    this.isLiked = false,
     this.createdAt,
   });
 
@@ -70,10 +72,15 @@ class PostItem {
   final int? categoryId;
 
   final PostAuthor? author;
+
+  /// 点赞总数（所有人）
   final int likeCount;
 
-  /// 评论数。详情页的评论区是阶段 12b，
-  /// 目前这个数字只用于展示，点进去还看不到评论列表。
+  /// **当前这个人**点没点过。未登录时恒为 `false` ——
+  /// 它答的是「我点过吗」，不是「有没有人点过」。
+  final bool isLiked;
+
+  /// 评论数
   final int commentCount;
 
   final DateTime? createdAt;
@@ -91,6 +98,25 @@ class PostItem {
   /// 是否带正文（即这份数据来自详情接口）
   bool get hasContent => content.isNotEmpty;
 
+  /// 用点赞接口返回的最新状态更新这一条。
+  ///
+  /// 只开放点赞涉及的两个字段：正文、作者不会因为点个赞而变，
+  /// 给一个通用的 copyWith 反而让人以为它们可以随便改。
+  /// 数字以**服务端返回的**为准，不是在本地加一 ——
+  /// 别人同时点赞时，本地加一算出来的是错的。
+  PostItem withLike(LikeState state) => PostItem(
+        id: id,
+        title: title,
+        summary: summary,
+        content: content,
+        categoryId: categoryId,
+        author: author,
+        likeCount: state.likeCount,
+        isLiked: state.isLiked,
+        commentCount: commentCount,
+        createdAt: createdAt,
+      );
+
   /// 从后端 JSON 构造。
   ///
   /// 对缺失字段做了容错，避免后端字段调整导致客户端崩溃。
@@ -107,6 +133,7 @@ class PostItem {
           : null,
       likeCount: (json['like_count'] as num?)?.toInt() ?? 0,
       commentCount: (json['comment_count'] as num?)?.toInt() ?? 0,
+      isLiked: json['is_liked'] as bool? ?? false,
       // 后端存的是 naive UTC，必须按 UTC 解释再转本地 ——
       // 直接用 DateTime.parse 会让 UTC+8 的用户看到偏 8 小时的时间
       createdAt: parseServerTime(json['created_at'] as String?),
@@ -122,6 +149,7 @@ class PostItem {
         'author': author?.toJson(),
         'like_count': likeCount,
         'comment_count': commentCount,
+        'is_liked': isLiked,
         'created_at': createdAt?.toIso8601String(),
       };
 }

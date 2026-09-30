@@ -7,14 +7,14 @@ import 'package:flutter_test/flutter_test.dart';
 
 import '../helpers/fake_backend.dart';
 
-/// 安知 —— 帖子详情页测试（阶段 12a 正文，12b 评论）
+/// 安知 —— 帖子详情页测试（阶段 12a 正文，12b 评论，12c 点赞）
 ///
 /// 重点：
 ///   · 从列表带过来的 preview 要先把页头画出来（不能整页转圈）
 ///   · 正文来自详情接口，不是列表的摘要
 ///   · 帖子不存在时给可读的 404，而不是空白页
-///   · 评论能用，但**未登录时不能假装能用**
-///   · 点赞如实标注阶段，不是点了没反应
+///   · 评论与点赞能用，但**未登录时不能假装能用**
+///   · 点赞的数字以服务端返回的为准，不在本地加一
 void main() {
   Future<AuthController> pumpDetail(
     WidgetTester tester,
@@ -127,14 +127,103 @@ void main() {
       expect(find.widgetWithText(OutlinedButton, '重试'), findsOneWidget);
     });
 
-    testWidgets('点赞如实标注阶段 12c', (WidgetTester tester) async {
-      await pumpDetail(tester, FakeBackend());
+  });
+
+  group('点赞', () {
+    testWidgets('未登录时提示登录，且不发请求', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend();
+
+      await pumpDetail(tester, backend);
 
       await tester.tap(find.byTooltip('点赞'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('阶段 12c'), findsOneWidget);
+      expect(find.text('登录后可以点赞'), findsOneWidget);
+      expect(
+        backend.requests.where((Uri url) => url.path.endsWith('/like')).length,
+        0,
+        reason: '明知没登录还发一个注定 401 的请求，是白跑一趟',
+      );
       await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('登录后点一下：数字加一，爱心变实心', (WidgetTester tester) async {
+      await pumpDetail(tester, FakeBackend(), loggedIn: true);
+
+      expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('4'), findsOneWidget, reason: '别人点的 3 个 + 我的 1 个');
+      expect(
+        find.byIcon(Icons.favorite_rounded),
+        findsOneWidget,
+        reason: '光换颜色不够，形状也要变',
+      );
+      expect(find.byTooltip('取消点赞'), findsOneWidget);
+    });
+
+    testWidgets('再点一下取消，数字回到原样', (WidgetTester tester) async {
+      await pumpDetail(tester, FakeBackend(), loggedIn: true);
+
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byTooltip('取消点赞'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('3'), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+    });
+
+    testWidgets('进来时就已点过的话，一开始就是实心', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..seedLike('xiaoming', 1);
+
+      await pumpDetail(tester, backend, loggedIn: true);
+
+      expect(
+        find.byIcon(Icons.favorite_rounded),
+        findsOneWidget,
+        reason: '详情接口返回的 is_liked 要真的被用上',
+      );
+      expect(find.text('4'), findsOneWidget);
+    });
+
+    testWidgets('点赞失败时提示原因，数字不动', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..likeStatus = 500;
+
+      await pumpDetail(tester, backend, loggedIn: true);
+
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('点赞失败，请稍后再试'), findsOneWidget);
+      expect(
+        find.text('3'),
+        findsOneWidget,
+        reason: '没成功就不能动数字 —— 那是骗用户',
+      );
+      expect(find.byIcon(Icons.favorite_border_rounded), findsOneWidget);
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('连点两次只发一个请求', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend();
+
+      await pumpDetail(tester, backend, loggedIn: true);
+      backend.delay = const Duration(milliseconds: 300);
+
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pump();
+      await tester.tap(find.byTooltip('点赞'));
+      await tester.pumpAndSettle();
+
+      expect(
+        backend.requests.where((Uri url) => url.path.endsWith('/like')).length,
+        1,
+        reason: '第二下点在请求还没回来的时候，不该再发一次',
+      );
+      expect(find.text('4'), findsOneWidget, reason: '也不该加两次');
     });
   });
 

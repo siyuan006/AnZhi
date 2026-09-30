@@ -1,4 +1,5 @@
 import '../models/comment_item.dart';
+import '../models/like_state.dart';
 import '../models/paged_result.dart';
 import '../models/post_item.dart';
 import 'api_client.dart';
@@ -7,14 +8,17 @@ import 'api_client.dart';
 ///
 /// 对应 `docs/API.md` 第 7 节。
 ///
-/// 读（列表、详情、评论列表）不需要登录，写（发表评论）需要。
+/// 读（列表、详情、评论列表）不需要登录，写（发表评论、点赞）需要。
 /// 两件事共用一个客户端：未登录时 `AuthController` 的 token 回调返回
 /// `null`，请求就不带 Authorization 头，读照样能用；登录之后写才成立。
 /// 因此**生产路径上必须传入 `AuthController.apiClient`** ——
-/// 传一个匿名客户端的话，读没问题，发评论会拿到 401，
+/// 传一个匿名客户端的话，读没问题，写会拿到 401，
 /// 而现象看起来完全像是后端的毛病。
 ///
-/// 点赞（12c）、发帖（12d）在后续补上。
+/// 读了 token 的接口（列表、详情）会多返回一个 `is_liked`：
+/// 它答的是「我点过吗」。匿名请求恒为 `false`。
+///
+/// 发帖（12d）在后续补上。
 class PostApi {
   PostApi({ApiClient? client})
       : _client = client ?? ApiClient(),
@@ -93,6 +97,35 @@ class PostApi {
       throw const ApiException('发表评论返回格式不正确');
     }
     return CommentItem.fromJson(json);
+  }
+
+  /// 点赞。需要登录，未登录时服务端返回 401「请先登录」。
+  ///
+  /// **幂等**：重复点赞不报错，也不会多出一个赞，返回的仍是当前状态。
+  Future<LikeState> like(int postId) async {
+    final Object? json = await _client.postJson(
+      '/api/posts/$postId/like',
+      const <String, dynamic>{},
+    );
+
+    return _likeState(json, '点赞');
+  }
+
+  /// 取消点赞。同样幂等：本来就没点过也算成功。
+  ///
+  /// 与收藏、历史的 `DELETE` 不同，这里**有响应体** ——
+  /// 爱心旁边的数字要以服务端算的为准（见 [LikeState]）。
+  Future<LikeState> unlike(int postId) async {
+    final Object? json = await _client.deleteJson('/api/posts/$postId/like');
+
+    return _likeState(json, '取消点赞');
+  }
+
+  LikeState _likeState(Object? json, String action) {
+    if (json is! Map<String, dynamic>) {
+      throw ApiException('$action返回格式不正确');
+    }
+    return LikeState.fromJson(json);
   }
 
   void dispose() {

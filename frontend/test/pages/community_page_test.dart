@@ -1,23 +1,42 @@
+import 'package:anzhi/core/auth_controller.dart';
 import 'package:anzhi/pages/community_page.dart';
 import 'package:anzhi/pages/post_detail_page.dart';
+import 'package:anzhi/services/post_api.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import '../helpers/fake_backend.dart';
 
-/// 安知 —— 社区页测试（阶段 12a）
+/// 安知 —— 社区页测试（阶段 12a 列表，12c 点赞）
 ///
 /// 重点：
 ///   · 三种「没有内容」必须分开说（加载中 / 拉不到 / 确实没人发帖）
 ///   · 点帖子进详情，回来后列表刷新
+///   · 点赞只动那一条，不整页重刷
 ///   · 还没做的功能要**如实标注阶段**，而不是点了没反应
 void main() {
-  Future<void> pumpCommunity(WidgetTester tester, FakeBackend backend) async {
+  Future<void> pumpCommunity(
+    WidgetTester tester,
+    FakeBackend backend, {
+    bool loggedIn = false,
+  }) async {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
+    final AuthController auth = backend.authController();
+    if (loggedIn) {
+      backend.seedAccount('xiaoming', 'hunter2hunter2');
+      await auth.login(username: 'xiaoming', password: 'hunter2hunter2');
+    }
+
     await tester.pumpWidget(
-      MaterialApp(home: CommunityPage(api: backend.postApi())),
+      AuthScope(
+        controller: auth,
+        child: MaterialApp(
+          // 用 authController 的客户端：点赞要带上它的 token
+          home: CommunityPage(api: PostApi(client: auth.apiClient)),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
   }
@@ -78,6 +97,82 @@ void main() {
     });
   });
 
+  group('点赞', () {
+    testWidgets('未登录时提示登录，且不发请求', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend();
+
+      await pumpCommunity(tester, backend);
+
+      await tester.tap(find.byIcon(Icons.favorite_border_rounded).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('登录后可以点赞'), findsOneWidget);
+      expect(
+        backend.requests.where((Uri url) => url.path.endsWith('/like')).length,
+        0,
+        reason: '明知没登录还发一个注定 401 的请求，是白跑一趟',
+      );
+      await tester.pump(const Duration(seconds: 5));
+    });
+
+    testWidgets('点一条只动那一条', (WidgetTester tester) async {
+      await pumpCommunity(tester, FakeBackend(), loggedIn: true);
+
+      await tester.tap(find.byIcon(Icons.favorite_border_rounded).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('4'), findsOneWidget, reason: '第一条 3 + 1');
+      expect(
+        find.text('5'),
+        findsOneWidget,
+        reason: '第二条没被点，数字不能跟着动',
+      );
+      expect(find.byIcon(Icons.favorite_rounded), findsOneWidget);
+    });
+
+    testWidgets('已经点过的帖子在列表里就是实心', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..seedLike('xiaoming', 2);
+
+      await pumpCommunity(tester, backend, loggedIn: true);
+
+      expect(
+        find.byIcon(Icons.favorite_rounded),
+        findsOneWidget,
+        reason: '列表接口返回的 is_liked 要真的被用上',
+      );
+      expect(find.text('6'), findsOneWidget, reason: '第二条 5 + 1');
+    });
+
+    testWidgets('取消点赞后数字回落', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..seedLike('xiaoming', 1);
+
+      await pumpCommunity(tester, backend, loggedIn: true);
+
+      await tester.tap(find.byIcon(Icons.favorite_rounded));
+      await tester.pumpAndSettle();
+
+      expect(find.text('3'), findsOneWidget);
+      expect(find.byIcon(Icons.favorite_rounded), findsNothing);
+    });
+
+    testWidgets('点赞失败时提示原因，数字不动', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..likeStatus = 500;
+
+      await pumpCommunity(tester, backend, loggedIn: true);
+
+      await tester.tap(find.byIcon(Icons.favorite_border_rounded).first);
+      await tester.pumpAndSettle();
+
+      expect(find.text('点赞失败，请稍后再试'), findsOneWidget);
+      expect(
+        find.text('3'),
+        findsOneWidget,
+        reason: '没成功就不能动数字 —— 那是骗用户',
+      );
+      await tester.pump(const Duration(seconds: 5));
+    });
+  });
+
   group('尚未实现的功能', () {
     testWidgets('点发帖提示阶段 12d', (WidgetTester tester) async {
       await pumpCommunity(tester, FakeBackend());
@@ -86,16 +181,6 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.textContaining('阶段 12d'), findsOneWidget);
-      await tester.pump(const Duration(seconds: 5));
-    });
-
-    testWidgets('点点赞提示阶段 12c', (WidgetTester tester) async {
-      await pumpCommunity(tester, FakeBackend());
-
-      await tester.tap(find.byIcon(Icons.favorite_border_rounded).first);
-      await tester.pumpAndSettle();
-
-      expect(find.textContaining('阶段 12c'), findsOneWidget);
       await tester.pump(const Duration(seconds: 5));
     });
   });

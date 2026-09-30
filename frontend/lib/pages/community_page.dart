@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
+import '../core/auth_controller.dart';
 import '../core/relative_time.dart';
+import '../models/like_state.dart';
 import '../models/paged_result.dart';
 import '../models/post_item.dart';
 import '../services/api_client.dart';
@@ -10,15 +12,16 @@ import '../services/post_api.dart';
 import '../widgets/async_status.dart';
 import 'post_detail_page.dart';
 
-/// 安知 —— 社区页（阶段 12a，PROJECT_SPEC 第二十、四十一节）
+/// 安知 —— 社区页（阶段 12a 列表，12c 点赞，PROJECT_SPEC 第二十、四十一节）
 ///
 /// V1.0 保持轻量：帖子列表 · 帖子详情 · 发布帖子 · 评论 · 点赞。
 /// 暂不实现：私信、关注用户、复杂推荐、AI 审核。
 ///
-/// 阶段 12a 只做**读**：列表与详情。点赞按钮、发帖按钮与评论入口
-/// 如实标注后续阶段 —— 做成「点了没反应」比标出来更糟。
-///
 /// 数据来源 `GET /api/posts`，**不需要登录**：社区内容是公开的。
+/// 带上 token 时每一项会多一个 `is_liked`，爱心因此能如实反映
+/// 「我点过没有」—— 而不是所有人看到的都是空心。
+///
+/// 发帖按钮与搜索如实标注后续阶段 —— 做成「点了没反应」比标出来更糟。
 class CommunityPage extends StatefulWidget {
   const CommunityPage({super.key, this.api});
 
@@ -38,6 +41,9 @@ class _CommunityPageState extends State<CommunityPage> {
   int _total = 0;
   int _page = 1;
   bool _loadingMore = false;
+
+  /// 正在请求中的帖子 id。挡住连点，避免同一条被点出两次请求。
+  final Set<int> _liking = <int>{};
 
   static const int _pageSize = 20;
 
@@ -131,6 +137,39 @@ class _CommunityPageState extends State<CommunityPage> {
     if (mounted) await _load(showLoading: false);
   }
 
+  /// 点赞 / 取消点赞。
+  ///
+  /// 只替换列表里的那一条，不整页重刷 —— 重刷会让用户正在看的位置
+  /// 跳回去。数字与爱心以服务端返回的为准（见 [LikeState]）。
+  Future<void> _toggleLike(PostItem post) async {
+    if (_liking.contains(post.id)) return;
+
+    final AuthController? auth = AuthScope.maybeOf(context);
+    if (auth == null || !auth.isLoggedIn) {
+      _toast('登录后可以点赞');
+      return;
+    }
+
+    setState(() => _liking.add(post.id));
+
+    try {
+      final LikeState state =
+          post.isLiked ? await _api.unlike(post.id) : await _api.like(post.id);
+      if (!mounted) return;
+      setState(() {
+        _items = <PostItem>[
+          for (final PostItem item in _items)
+            item.id == post.id ? item.withLike(state) : item,
+        ];
+        _liking.remove(post.id);
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _liking.remove(post.id));
+      _toast(error.message);
+    }
+  }
+
   /// 功能未实现的统一提示。
   /// 明确告知所处阶段，避免用户以为功能已可用但没有响应。
   void _notYet(String feature, String stage) {
@@ -215,7 +254,7 @@ class _CommunityPageState extends State<CommunityPage> {
         return _PostCard(
           post: post,
           onTap: () => _openDetail(post),
-          onLike: () => _notYet('点赞', '阶段 12c'),
+          onLike: () => _toggleLike(post),
           onComment: () => _openDetail(post),
         );
       },
@@ -401,8 +440,11 @@ class _PostCard extends StatelessWidget {
               Row(
                 children: <Widget>[
                   _ActionIcon(
-                    icon: Icons.favorite_border_rounded,
+                    icon: post.isLiked
+                        ? Icons.favorite_rounded
+                        : Icons.favorite_border_rounded,
                     label: '${post.likeCount}',
+                    active: post.isLiked,
                     onTap: onLike,
                   ),
                   const SizedBox(width: 20),
@@ -426,15 +468,22 @@ class _ActionIcon extends StatelessWidget {
     required this.icon,
     required this.label,
     required this.onTap,
+    this.active = false,
   });
 
   final IconData icon;
   final String label;
   final VoidCallback onTap;
 
+  /// 已点赞时高亮。图标形状同时会变（实心 / 空心）——
+  /// 只换颜色的话，色觉障碍用户看不出区别。
+  final bool active;
+
   @override
   Widget build(BuildContext context) {
-    final Color color = Theme.of(context).colorScheme.outline;
+    final Color color = active
+        ? Theme.of(context).colorScheme.primary
+        : Theme.of(context).colorScheme.outline;
 
     return InkWell(
       onTap: onTap,

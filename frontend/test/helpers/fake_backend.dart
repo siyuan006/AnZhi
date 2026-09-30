@@ -333,14 +333,61 @@ class FakeBackend {
   /// 清空帖子目录（测「还没有人发帖」用）
   void seedNoPosts() => posts = <Map<String, dynamic>>[];
 
-  Map<String, dynamic> _postSummaryJson(Map<String, dynamic> post) {
+  // --- 点赞（/api/posts/{id}/like）-----------------------------------------
+
+  /// 用户名 -> 点过赞的帖子 id。
+  ///
+  /// 与真实后端一样**跟着账号走**：「A 点的赞不会让 B 的爱心变亮」
+  /// 这条必须在假后端里也成立，否则页面测试验不出这个 bug。
+  final Map<String, Set<int>> likes = <String, Set<int>>{};
+
+  /// 预置一个「已经点过」的状态
+  void seedLike(String username, int postId) {
+    likes.putIfAbsent(username, () => <int>{}).add(postId);
+  }
+
+  /// 强制点赞走错误分支。
+  ///
+  /// 不复用全局的 `errorStatus`：那会把帖子列表一起打挂，
+  /// 于是「点赞失败」和「页面没加载出来」在测试里长得一模一样。
+  int? likeStatus;
+  String likeError = '点赞失败，请稍后再试';
+
+  /// 帖子目录里的 `like_count` 是**别人**点的赞，这里再叠上假用户点的。
+  /// 与真实后端一致：数字来自真实的行数，不是「旧值加一」。
+  int _likeCountOf(Map<String, dynamic> post) {
+    final int base = (post['like_count'] as num?)?.toInt() ?? 0;
+    final int mine = likes.values
+        .where((Set<int> ids) => ids.contains(post['id']))
+        .length;
+    return base + mine;
+  }
+
+  /// 按**当前请求者**的视角序列化一条帖子。
+  ///
+  /// 真实后端就是这么做的：列表与详情都带 `is_liked`，
+  /// 匿名请求恒为 false。
+  Map<String, dynamic> _postJson(Map<String, dynamic> post, String? viewer) {
+    return <String, dynamic>{
+      ...post,
+      'like_count': _likeCountOf(post),
+      'is_liked': viewer != null &&
+          (likes[viewer] ?? const <int>{}).contains(post['id']),
+    };
+  }
+
+  Map<String, dynamic> _postSummaryJson(
+    Map<String, dynamic> post,
+    String? viewer,
+  ) {
     // 与真实后端一致：列表项**不带 content**，只有 summary
-    final Map<String, dynamic> copy = Map<String, dynamic>.from(post)
-      ..remove('content');
+    final Map<String, dynamic> copy = Map<String, dynamic>.from(
+      _postJson(post, viewer),
+    )..remove('content');
     return copy;
   }
 
-  Map<String, dynamic> _postPage(Map<String, String> query) {
+  Map<String, dynamic> _postPage(Map<String, String> query, String? viewer) {
     Iterable<Map<String, dynamic>> list = posts;
 
     final String? keyword = query['keyword'];
@@ -369,13 +416,15 @@ class FakeBackend {
       'total': all.length,
       'page': page,
       'page_size': pageSize,
-      'items': slice.map(_postSummaryJson).toList(),
+      'items': slice.map((Map<String, dynamic> p) => _postSummaryJson(p, viewer)).toList(),
     };
   }
 
   Future<http.Response> _handlePosts(http.Request request, String path) async {
+    final String? viewer = _usernameFromHeader(request);
+
     if (path == '/api/posts') {
-      return _json(_postPage(request.url.queryParameters), 200);
+      return _json(_postPage(request.url.queryParameters, viewer), 200);
     }
 
     final String rest = path.substring('/api/posts/'.length);
@@ -383,6 +432,11 @@ class FakeBackend {
       final int? postId =
           int.tryParse(rest.substring(0, rest.length - '/comments'.length));
       return _handleComments(request, postId);
+    }
+    if (rest.endsWith('/like')) {
+      final int? postId =
+          int.tryParse(rest.substring(0, rest.length - '/like'.length));
+      return _handleLike(request, postId);
     }
 
     final int? id = int.tryParse(rest);
@@ -395,7 +449,44 @@ class FakeBackend {
       posts = posts.where((Map<String, dynamic> p) => p['id'] != id).toList();
       return _json(<String, dynamic>{}, 204);
     }
-    return _json(post, 200);
+    return _json(_postJson(post, viewer), 200);
+  }
+
+  /// 点赞与取消，复述了后端的三个关键约定：
+  ///   - 未登录一律 401「请先登录」
+  ///   - 新建时 201、之前就点过时 200（幂等）
+  ///   - **回传当前状态**而不只是「成功」，客户端据此改数字和爱心
+  Future<http.Response> _handleLike(http.Request request, int? postId) async {
+    if (likeStatus != null) {
+      return _json(<String, dynamic>{'detail': likeError}, likeStatus!);
+    }
+
+    final Map<String, dynamic>? post = _findPost(postId);
+    if (post == null) {
+      return _json(<String, dynamic>{'detail': '帖子不存在或已删除'}, 404);
+    }
+
+    final String? username = _usernameFromHeader(request);
+    if (username == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    final Set<int> ids = likes.putIfAbsent(username, () => <int>{});
+    final int id = post['id'] as int;
+
+    if (request.method == 'DELETE') {
+      ids.remove(id);
+      return _json(<String, dynamic>{
+        'like_count': _likeCountOf(post),
+        'is_liked': false,
+      }, 200);
+    }
+
+    final bool created = ids.add(id);
+    return _json(<String, dynamic>{
+      'like_count': _likeCountOf(post),
+      'is_liked': true,
+    }, created ? 201 : 200);
   }
 
   Map<String, dynamic>? _findPost(int? id) => id == null

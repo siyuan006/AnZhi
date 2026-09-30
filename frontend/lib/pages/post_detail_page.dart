@@ -5,21 +5,21 @@ import '../core/app_theme.dart';
 import '../core/auth_controller.dart';
 import '../core/relative_time.dart';
 import '../models/comment_item.dart';
+import '../models/like_state.dart';
 import '../models/paged_result.dart';
 import '../models/post_item.dart';
 import '../services/api_client.dart';
 import '../services/post_api.dart';
 import '../widgets/async_status.dart';
 
-/// 安知 —— 帖子详情页（阶段 12a 正文，12b 评论，PROJECT_SPEC 第四十一节）
+/// 安知 —— 帖子详情页（阶段 12a 正文，12b 评论，12c 点赞，PROJECT_SPEC 第四十一节）
 ///
-/// 链路：`GET /api/posts/{id}` → 正文；`GET/POST /api/posts/{id}/comments` → 评论。
+/// 链路：`GET /api/posts/{id}` → 正文；`GET/POST /api/posts/{id}/comments` → 评论；
+/// `POST/DELETE /api/posts/{id}/like` → 点赞。
 ///
 /// 列表页点进来时会把那一条（只有标题和摘要）带过来，
 /// 页头因此能立刻画出来 —— 用户看到的是自己点的东西，
 /// 而不是一整页的转圈。
-///
-/// **点赞是后续阶段（12c）。** 这里如实显示，而不是画一个点了没反应的按钮。
 class PostDetailPage extends StatefulWidget {
   const PostDetailPage({
     super.key,
@@ -56,6 +56,7 @@ class _PostDetailPageState extends State<PostDetailPage> {
   int _commentTotal = 0;
 
   bool _sending = false;
+  bool _liking = false;
 
   @override
   void initState() {
@@ -151,10 +152,41 @@ class _PostDetailPageState extends State<PostDetailPage> {
     }
   }
 
-  void _notYet(String feature, String stage) {
+  /// 点赞 / 取消点赞。
+  ///
+  /// 数字和爱心**以服务端返回的为准**，不在本地加一减一：
+  /// 别人同时点赞时，本地算出来的数字是错的。
+  Future<void> _toggleLike() async {
+    final PostItem? item = _item;
+    if (item == null || _liking) return;
+
+    final AuthController? auth = AuthScope.maybeOf(context);
+    if (auth == null || !auth.isLoggedIn) {
+      _toast('登录后可以点赞');
+      return;
+    }
+
+    setState(() => _liking = true);
+
+    try {
+      final LikeState state =
+          item.isLiked ? await _api.unlike(widget.postId) : await _api.like(widget.postId);
+      if (!mounted) return;
+      setState(() {
+        _item = item.withLike(state);
+        _liking = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() => _liking = false);
+      _toast(error.message);
+    }
+  }
+
+  void _toast(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text('「$feature」将在$stage实现'),
+        content: Text(message),
         behavior: SnackBarBehavior.floating,
         duration: const Duration(seconds: 2),
       ),
@@ -284,10 +316,13 @@ class _PostDetailPageState extends State<PostDetailPage> {
         Row(
           children: <Widget>[
             _ActionButton(
-              icon: Icons.favorite_border_rounded,
+              icon: item.isLiked
+                  ? Icons.favorite_rounded
+                  : Icons.favorite_border_rounded,
               label: '${item.likeCount}',
-              tooltip: '点赞',
-              onTap: () => _notYet('点赞', '阶段 12c'),
+              tooltip: item.isLiked ? '取消点赞' : '点赞',
+              active: item.isLiked,
+              onTap: _toggleLike,
             ),
             const SizedBox(width: 12),
             _ActionButton(
@@ -500,6 +535,7 @@ class _ActionButton extends StatelessWidget {
     required this.label,
     required this.tooltip,
     required this.onTap,
+    this.active = false,
   });
 
   final IconData icon;
@@ -507,8 +543,14 @@ class _ActionButton extends StatelessWidget {
   final String tooltip;
   final VoidCallback onTap;
 
+  /// 已点赞时高亮。颜色和图标形状要**同时**变 ——
+  /// 只换颜色的话，色觉障碍用户看不出区别。
+  final bool active;
+
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
     return Tooltip(
       message: tooltip,
       child: OutlinedButton.icon(
@@ -516,6 +558,7 @@ class _ActionButton extends StatelessWidget {
         icon: Icon(icon, size: 17),
         label: Text(label),
         style: OutlinedButton.styleFrom(
+          foregroundColor: active ? theme.colorScheme.primary : null,
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
           textStyle: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
         ),

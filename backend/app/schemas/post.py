@@ -38,9 +38,10 @@ class PostItem(BaseModel):
     like_count: int
     comment_count: int
     created_at: datetime
+    is_liked: bool = False
 
     @classmethod
-    def from_model(cls, row: Post) -> "PostItem":
+    def from_model(cls, row: Post, *, is_liked: bool = False) -> "PostItem":
         """从 ORM 对象构造。
 
         调用方必须保证 `row.author` 与 `row.category` 已被加载
@@ -57,6 +58,7 @@ class PostItem(BaseModel):
             like_count=row.like_count,
             comment_count=row.comment_count,
             created_at=row.created_at,
+            is_liked=is_liked,
         )
 
 
@@ -72,9 +74,10 @@ class PostDetail(BaseModel):
     like_count: int
     comment_count: int
     created_at: datetime
+    is_liked: bool = False
 
     @classmethod
-    def from_model(cls, row: Post) -> "PostDetail":
+    def from_model(cls, row: Post, *, is_liked: bool = False) -> "PostDetail":
         return cls(
             id=row.id,
             title=row.title,
@@ -85,4 +88,16 @@ class PostDetail(BaseModel):
             like_count=row.like_count,
             comment_count=row.comment_count,
             created_at=row.created_at,
+            is_liked=is_liked,
         )
+
+
+class LikeState(BaseModel):
+    """点赞接口的响应。
+
+    回传**当前状态**而不只是「操作成功」：客户端点完要立刻把爱心和
+    数字改对，只回一个 204 的话它只能自己猜加一还是减一。
+    """
+
+    like_count: int
+    is_liked: bool

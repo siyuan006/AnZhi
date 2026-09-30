@@ -23,7 +23,7 @@
 | 9 | AI 安全控制（SafetyGuard） | ✅ 已完成 |
 | 10 | 知识系统 | ✅ 已完成 |
 | 11 | 收藏 / 历史记录 | ✅ 已完成 |
-| 12 | 社区 | 🟡 12a 帖子列表 + 详情、12b 评论已完成 |
+| 12 | 社区 | 🟡 12a 帖子列表 + 详情、12b 评论、12c 点赞已完成 |
 | 13 | 个性化 | ⬜ 待开始 |
 | 14 | RAG | ⬜ 待开始 |
 | 15 | 测试 | ⬜ 待开始 |
@@ -31,12 +31,12 @@
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 社区浏览。**
+**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 社区浏览与互动。**
 
 - 前端：可编译、可运行，已产出 debug APK；首页、知识页、知识详情页、AI 问答页、登录注册页、我的收藏页、浏览历史页、社区页、帖子详情页、我的页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态
-- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/knowledge/{id}`、`/api/knowledge/{id}/view`、`/api/chat`、`/api/auth/*`、`/api/favorites`、`/api/history`、`/api/posts`、`/api/posts/{id}/comments` 已实测返回正确响应
+- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/knowledge/{id}`、`/api/knowledge/{id}/view`、`/api/chat`、`/api/auth/*`、`/api/favorites`、`/api/history`、`/api/posts`、`/api/posts/{id}/comments`、`/api/posts/{id}/like` 已实测返回正确响应
 - 数据库：`backend/anzhi.db` 已建全部 9 张表，六大分类种子数据已写入
-- 联调：前端 270 个测试 + 后端 415 个测试全部通过；另有 48 个「真实后端」集成测试（知识库没有已发布内容时，部分如实跳过而非空跑）
+- 联调：前端 279 个测试 + 后端 438 个测试全部通过；另有 53 个「真实后端」集成测试（知识库没有已发布内容时，部分如实跳过而非空跑）
 
 尚未打通的部分（按阶段推进，不做假实现）：
 
@@ -46,7 +46,7 @@
 | **JWT_SECRET** | 未配置时开发环境每次启动随机生成，**后端一重启所有登录状态失效**；生产环境缺此项会拒绝启动 | 配置 `.env` 即可 |
 | 内容发布状态 | 12 条初稿已入库但**均为「待审核」**：`/api/knowledge` 因此如实返回空，App 首页与知识页显示「暂无内容」 | 待人工审核 |
 | **登录状态不持久化** | App 关闭后需要重新登录。持久化需要一个存储插件（如 `shared_preferences`），属新增第三方依赖，按 AI_RULES 第五节**未擅自引入** | 待确认后接入 |
-| 社区互动 | 帖子列表、详情、评论已接真实接口（阶段 12a–12b）。**发帖与点赞尚未实现**，界面上如实标注阶段号而不是点了没反应 | 12c–12d |
+| 社区互动 | 帖子列表、详情、评论、点赞已接真实接口（阶段 12a–12c）。**发帖尚未实现**，界面上如实标注阶段号而不是点了没反应 | 12d |
 | `GET /api/home` 首页聚合接口 | 首页改为直接调用 `/api/knowledge` 取前 5 条 | 13 |
 
 > **关于「AI 问答还不能用」：** 阶段 8 完成的是**链路代码**——
@@ -278,7 +278,7 @@ Flutter  ──→  FastAPI  ──→  .env  ──→  DeepSeek API
 cd frontend
 flutter pub get
 flutter analyze        # 静态检查
-flutter test           # 运行测试（270 passed，另有 48 个真实后端测试默认跳过）
+flutter test           # 运行测试（279 passed，另有 53 个真实后端测试默认跳过）
 flutter run            # 连接真机/模拟器运行
 flutter build apk --debug    # 构建 APK
 ```
@@ -393,8 +393,8 @@ app/models/           ← 表结构
 
 | 层次 | 命令 | 说明 |
 |---|---|---|
-| 假后端 | `flutter test` | 270 个测试，无需后端，验证页面在成功 / 失败 / 空数据下的表现 |
-| 真实后端 | 见下 | 48 个测试，验证后端真实返回的字段能被客户端正确解析 |
+| 假后端 | `flutter test` | 279 个测试，无需后端，验证页面在成功 / 失败 / 空数据下的表现 |
+| 真实后端 | 见下 | 53 个测试，验证后端真实返回的字段能被客户端正确解析 |
 
 ```bash
 # 终端 1：启动后端

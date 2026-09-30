@@ -5,6 +5,7 @@ import 'package:anzhi/models/comment_item.dart';
 import 'package:anzhi/models/favorite_item.dart';
 import 'package:anzhi/models/history_item.dart';
 import 'package:anzhi/models/knowledge_item.dart';
+import 'package:anzhi/models/like_state.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/models/post_item.dart';
 import 'package:anzhi/services/api_client.dart';
@@ -1029,6 +1030,129 @@ void main() {
       test('往不存在的帖子发评论是 404', () async {
         await expectLater(
           authedPosts.postComment(999999, '你好'),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 404),
+          ),
+        );
+      });
+
+      test('列表与详情都带 is_liked，且匿名恒为 false', () async {
+        // 列表页上就有点赞按钮。只让详情带这个字段的话，
+        // 同一篇帖子在详情页是实心、回到列表变成空心。
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final Object? listBody = await postsClient.getJson(
+          '/api/posts',
+          query: <String, dynamic>{'page': 1, 'page_size': 1},
+        );
+        final Map<String, dynamic> item =
+            ((listBody! as Map<String, dynamic>)['items'] as List<dynamic>).first
+                as Map<String, dynamic>;
+        expect(item.containsKey('is_liked'), isTrue, reason: '列表项缺了 is_liked');
+
+        final Object? detailBody = await postsClient.getJson('/api/posts/$id');
+        expect(
+          (detailBody! as Map<String, dynamic>).containsKey('is_liked'),
+          isTrue,
+          reason: '详情缺了 is_liked',
+        );
+
+        expect(
+          (await posts.fetchPostDetail(id)).isLiked,
+          isFalse,
+          reason: '匿名请求没有身份，谈不上「我点过」',
+        );
+      });
+
+      test('未登录点赞是 401 与「请先登录」', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        await expectLater(
+          posts.like(id),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                .having((ApiException e) => e.message, 'message', '请先登录'),
+          ),
+        );
+      });
+
+      test('点赞后数字加一，列表与详情口径一致，取消后回到原样', () async {
+        // ⚠️ 会往真实数据库写一行 likes。与评论那条**不同**：这里跑完会
+        // 自己取消掉，因此正常结束时库里不留痕迹（中途挂掉则可能留下）。
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        addTearDown(() async {
+          try {
+            await authedPosts.unlike(id);
+          } on ApiException {
+            // 清理失败不该盖住真正的断言失败
+          }
+        });
+
+        final PostItem before = await authedPosts.fetchPostDetail(id);
+        expect(
+          before.isLiked,
+          isFalse,
+          reason: '这条帖子已经是「已点赞」状态，说明上次联调没清干净',
+        );
+
+        final LikeState liked = await authedPosts.like(id);
+        expect(liked.isLiked, isTrue);
+        expect(liked.likeCount, before.likeCount + 1);
+
+        final PostItem after = await authedPosts.fetchPostDetail(id);
+        expect(after.isLiked, isTrue, reason: '详情接口没把 is_liked 带回来');
+        expect(after.likeCount, before.likeCount + 1);
+
+        final PagedResult<PostItem> page =
+            await authedPosts.fetchPosts(pageSize: 100);
+        final PostItem listed =
+            page.items.firstWhere((PostItem p) => p.id == id);
+        expect(listed.isLiked, isTrue, reason: '列表和详情的口径必须一致');
+        expect(listed.likeCount, before.likeCount + 1);
+
+        final LikeState unliked = await authedPosts.unlike(id);
+        expect(unliked.isLiked, isFalse);
+        expect(
+          unliked.likeCount,
+          before.likeCount,
+          reason: '取消之后要回到原来的数字，而不是继续往上走',
+        );
+      });
+
+      test('重复点赞不会多加一个', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        addTearDown(() async {
+          try {
+            await authedPosts.unlike(id);
+          } on ApiException {
+            // 同上
+          }
+        });
+
+        final PostItem before = await authedPosts.fetchPostDetail(id);
+        await authedPosts.like(id);
+
+        final LikeState again = await authedPosts.like(id);
+
+        expect(
+          again.likeCount,
+          before.likeCount + 1,
+          reason: '点两次只算一个赞，第二次是幂等的',
+        );
+        expect(again.isLiked, isTrue);
+      });
+
+      test('往不存在的帖子点赞是 404', () async {
+        await expectLater(
+          authedPosts.like(999999),
           throwsA(
             isA<ApiException>()
                 .having((ApiException e) => e.statusCode, 'statusCode', 404),
