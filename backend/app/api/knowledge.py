@@ -20,7 +20,11 @@ from app.schemas.knowledge import (
     KnowledgeListItem,
     ViewCountOut,
 )
-from app.services.knowledge import favorite_service, knowledge_service
+from app.services.knowledge import (
+    favorite_service,
+    history_service,
+    knowledge_service,
+)
 
 router = APIRouter(tags=["知识系统"])
 
@@ -89,16 +93,13 @@ def get_knowledge(
     """返回知识详情。
 
     **本接口不累加浏览量**，也不会写入浏览历史 —— 它是一个纯读接口。
-    计数由客户端在用户真正打开详情页时调用 `POST /api/knowledge/{id}/view`。
+    这两件事都由客户端在用户真正打开详情页时调用
+    `POST /api/knowledge/{id}/view` 完成。
 
     带有效 token 时会在响应里带上 `is_favorited`，供详情页把收藏按钮
     初始化成正确的状态；匿名访问照常返回 200，`is_favorited` 恒为 False。
     **匿名仍然能读到全部内容** —— 这是刻意的（docs/API.md 第 11 节）：
     安知是安全科普应用，用户可能在起火、有人触电的当口打开它。
-
-    尚未实现（按阶段推进，不做假实现）：
-
-    - **写入浏览历史**：见阶段 11c。
     """
     item = knowledge_service.get_knowledge(db, knowledge_id)
     if item is None:
@@ -125,9 +126,10 @@ def get_knowledge(
 )
 def record_view(
     knowledge_id: int,
+    user: User | None = Depends(get_optional_user),
     db: Session = Depends(get_db),
 ) -> ViewCountOut:
-    """把浏览量加一，返回最新的浏览量。
+    """把浏览量加一，返回最新的浏览量；已登录用户顺带记一条浏览历史。
 
     单独做成写接口而不是塞进 GET 详情里：
 
@@ -138,6 +140,11 @@ def record_view(
 
     未发布内容同样返回 404 —— 直接对未发布的 id 自增，
     等于对外确认了这条内容存在。
+
+    **浏览历史挂在同一个动作上**（阶段 11c），但它需要身份：
+    未登录时只计数、不写历史，因此这里用的是 `get_optional_user`
+    而不是 `get_current_user` —— 匿名浏览知识是允许的，
+    不会因为「记不了历史」就把这次浏览变成 401。
     """
     count = knowledge_service.increment_view_count(db, knowledge_id)
     if count is None:
@@ -145,4 +152,14 @@ def record_view(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="知识不存在或未发布",
         )
+
+    # 放在计数之后：走到这里说明可见性已经确认过了，
+    # 不必再查一次「这条能不能看」。
+    # 并发下两个请求抢同一条历史时，冲突在 service 内部被消化成
+    # 「更新那一条」，不会冒成 500 —— 否则一次正常的浏览会变成错误页。
+    if user is not None:
+        history_service.record_view(
+            db, user_id=user.id, knowledge_id=knowledge_id
+        )
+
     return ViewCountOut(view_count=count)

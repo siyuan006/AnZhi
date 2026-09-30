@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, UniqueConstraint
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, utcnow
+from app.models.knowledge import Knowledge
 
 
 class History(Base):
@@ -38,6 +39,10 @@ class History(Base):
     viewed_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utcnow, index=True
     )
+
+    # lazy="joined"：历史列表要显示标题和分类，若用默认懒加载会 N+1。
+    # 与 Favorite.knowledge 的处理保持一致。
+    knowledge: Mapped["Knowledge"] = relationship(lazy="joined")
 
     def __repr__(self) -> str:
         return f"<History user={self.user_id} knowledge={self.knowledge_id}>"

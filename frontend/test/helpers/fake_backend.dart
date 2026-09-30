@@ -6,6 +6,7 @@ import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/auth_store.dart';
 import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/favorite_api.dart';
+import 'package:anzhi/services/history_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -41,6 +42,10 @@ class FakeBackend {
   /// 用户得知道这一下没生效。
   int? favoriteErrorStatus;
   String favoriteErrorMessage = '收藏失败，请稍后再试';
+
+  /// 设为非空时，历史接口一律返回该状态码。
+  int? historyErrorStatus;
+  String historyErrorMessage = '浏览历史加载失败，请稍后再试';
 
   /// 非 2xx 响应
   int? errorStatus;
@@ -185,6 +190,16 @@ class FakeBackend {
         ),
       );
 
+  /// 浏览历史接口（需要调用方自己给出 token 回调）。
+  /// 页面测试一般不需要它 —— 那些用的是 `authController().historyApi`。
+  HistoryApi historyApi({String? Function()? token}) => HistoryApi(
+        client: ApiClient(
+          httpClient: httpClient,
+          baseUrl: 'http://test.local',
+          token: token,
+        ),
+      );
+
   /// 预置一个已注册的账号
   void seedAccount(String username, String password, {String? nickname}) {
     accounts[username] = password;
@@ -206,6 +221,36 @@ class FakeBackend {
   /// 预置一条收藏（测试里直接构造「已经收藏过」的状态）
   void seedFavorite(String username, int knowledgeId) {
     favorites.putIfAbsent(username, () => <int>[]).add(knowledgeId);
+  }
+
+  // --- 浏览历史（/api/history）--------------------------------------------
+
+  /// 用户名 -> 浏览过的知识 id，**按浏览先后**排列（最近看的在最后）。
+  /// 同样跟着账号走，「A 看不到 B 的历史」必须在假后端里也成立。
+  final Map<String, List<int>> histories = <String, List<int>>{};
+
+  /// 「用户名/知识 id」 -> 距现在多久以前看的。
+  ///
+  /// 用来构造「三天前看过」这类状态；不设置就是刚刚看过的。
+  final Map<String, Duration> _historyAges = <String, Duration>{};
+
+  /// 预置一条浏览记录。
+  void seedHistory(
+    String username,
+    int knowledgeId, {
+    Duration age = Duration.zero,
+  }) {
+    histories.putIfAbsent(username, () => <int>[]).add(knowledgeId);
+    _historyAges['$username/$knowledgeId'] = age;
+  }
+
+  /// 记一次浏览，与真实后端一样**同一篇只留一条**（时间往后推）。
+  void _recordHistory(String username, int knowledgeId) {
+    final List<int> ids = histories.putIfAbsent(username, () => <int>[]);
+    ids
+      ..remove(knowledgeId)
+      ..add(knowledgeId);
+    _historyAges['$username/$knowledgeId'] = Duration.zero;
   }
 
   Map<String, dynamic> _userJson(String username) => <String, dynamic>{
@@ -264,6 +309,10 @@ class FakeBackend {
       return _handleFavorites(request, path);
     }
 
+    if (path == '/api/history' || path.startsWith('/api/history/')) {
+      return _handleHistory(request, path);
+    }
+
     if (path == '/api/knowledge') {
       return _json(_filtered(request.url.queryParameters), 200);
     }
@@ -279,6 +328,12 @@ class FakeBackend {
       }
       final int count = (viewCounts[id] ?? 0) + 1;
       viewCounts[id] = count;
+
+      // 与真实后端一致：浏览时**顺带**写一条历史，但只有登录用户才有
+      // 「谁」可以记。匿名浏览照常计数，不写任何人的历史。
+      final String? viewer = _usernameFromHeader(request);
+      if (viewer != null) _recordHistory(viewer, id);
+
       return _json(<String, dynamic>{'view_count': count}, 200);
     }
 
@@ -452,6 +507,94 @@ class FakeBackend {
         for (final int id in slice)
           <String, dynamic>{
             ..._favoriteRecordJson(username, id),
+            'knowledge': items.firstWhere(
+              (Map<String, dynamic> item) => item['id'] == id,
+            ),
+          },
+      ],
+    };
+  }
+
+  /// 浏览历史相关的响应。
+  ///
+  /// 复述了后端的三个关键约定：
+  ///   - 未登录一律 401「请先登录」
+  ///   - 两个删除接口都是**幂等**的（删一条本来就没有的也是 204）
+  ///   - `viewed_at` 是 **naive UTC**（不带 Z）
+  ///
+  /// 最后一条特别要紧：客户端要自己补时区（见 `core/relative_time.dart`）。
+  /// 假后端如果图省事直接吐一个带 Z 的时间，那一步换算就永远测不到了。
+  Future<http.Response> _handleHistory(
+    http.Request request,
+    String path,
+  ) async {
+    if (historyErrorStatus != null) {
+      return _json(
+        <String, dynamic>{'detail': historyErrorMessage},
+        historyErrorStatus!,
+      );
+    }
+
+    final String? username = _usernameFromHeader(request);
+    if (username == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    final List<int> ids = histories.putIfAbsent(username, () => <int>[]);
+
+    if (path == '/api/history') {
+      if (request.method == 'DELETE') {
+        ids.clear();
+        return http.Response('', 204);
+      }
+      return _json(_historyPage(username, request.url.queryParameters), 200);
+    }
+
+    // DELETE /api/history/{knowledge_id}
+    final int? id = int.tryParse(path.substring('/api/history/'.length));
+    if (id != null) {
+      ids.remove(id);
+      _historyAges.remove('$username/$id');
+    }
+    return http.Response('', 204);
+  }
+
+  Map<String, dynamic> _historyRecordJson(String username, int knowledgeId) {
+    final Duration age = _historyAges['$username/$knowledgeId'] ?? Duration.zero;
+    final DateTime at = DateTime.now().toUtc().subtract(age);
+
+    return <String, dynamic>{
+      'id': (histories[username] ?? const <int>[]).indexOf(knowledgeId) + 1,
+      'knowledge_id': knowledgeId,
+      // 去掉尾部 Z，还原成后端那种 naive UTC
+      'viewed_at': at.toIso8601String().replaceFirst('Z', ''),
+    };
+  }
+
+  /// 列表带上嵌套知识，且只返回仍然存在的条目 ——
+  /// 与后端的 INNER JOIN 过滤对应。
+  Map<String, dynamic> _historyPage(String username, Map<String, String> query) {
+    // 最近看的排在前面
+    final List<int> visible = (histories[username] ?? const <int>[])
+        .reversed
+        .where(_exists)
+        .toList(growable: false);
+
+    final int page = int.tryParse(query['page'] ?? '1') ?? 1;
+    final int pageSize = int.tryParse(query['page_size'] ?? '20') ?? 20;
+    final int start = (page - 1) * pageSize;
+    final List<int> slice = start >= visible.length
+        ? const <int>[]
+        : visible.sublist(start, (start + pageSize).clamp(0, visible.length));
+
+    return <String, dynamic>{
+      'total': visible.length,
+      'page': page,
+      'page_size': pageSize,
+      'items': <Map<String, dynamic>>[
+        for (final int id in slice)
+          <String, dynamic>{
+            ..._historyRecordJson(username, id),
             'knowledge': items.firstWhere(
               (Map<String, dynamic> item) => item['id'] == id,
             ),

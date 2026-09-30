@@ -2,12 +2,14 @@ import 'package:anzhi/core/app_constants.dart';
 import 'package:anzhi/models/ai_answer.dart';
 import 'package:anzhi/models/auth_user.dart';
 import 'package:anzhi/models/favorite_item.dart';
+import 'package:anzhi/models/history_item.dart';
 import 'package:anzhi/models/knowledge_item.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/services/api_client.dart';
 import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/favorite_api.dart';
+import 'package:anzhi/services/history_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -53,6 +55,11 @@ void main() {
 
   // 认证同样用独立的 ApiClient：token 每次请求时从这个变量现取。
   // 测试会在登录成功后把它设上，于是后续请求自动带上 Authorization。
+  //
+  // 这带来一个**必须知道的顺序依赖**：「收藏」与「浏览历史」两组靠
+  // `authToken` 拿到身份，而这个值由上面的「认证」组填。因此单独跑
+  // 其中某一条（`--plain-name`）会以 401「请先登录」失败 —— 那不是
+  // 后端坏了，是登录根本没发生。要单独调，请整份文件一起跑。
   String? authToken;
   final AuthApi authApi = AuthApi(
     client: ApiClient(
@@ -85,6 +92,15 @@ void main() {
     ),
   );
 
+  // 浏览历史同样用独立的 ApiClient，token 从同一个变量现取。
+  final HistoryApi history = HistoryApi(
+    client: ApiClient(
+      baseUrl: baseUrl,
+      timeout: const Duration(seconds: 5),
+      token: () => authToken,
+    ),
+  );
+
   /// 本次运行创建的账号名。
   ///
   /// **这些用例会在真实数据库里创建用户。** 名字带固定前缀便于事后清理，
@@ -100,6 +116,7 @@ void main() {
     authApi.dispose();
     favorites.dispose();
     authedApi.dispose();
+    history.dispose();
   });
 
   group(
@@ -537,6 +554,201 @@ void main() {
         );
 
         await favorites.remove(id);
+      });
+    },
+    skip: enabled
+        ? false
+        : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
+  );
+
+  group(
+    '真实后端 · 浏览历史',
+    () {
+      /// 取一条已发布的知识 id；没有已发布内容时返回 null。
+      ///
+      /// **宁可跳过也不空跑**：浏览历史整条链路都要求「这条知识看得见」，
+      /// 没有数据时断言什么都不会成立，假装跑过等于没验。
+      Future<int?> firstPublishedId() async {
+        final PagedResult<KnowledgeItem> all = await api.fetchKnowledge();
+        if (all.items.isEmpty) {
+          markTestSkipped('知识库当前没有已发布内容，浏览历史未验证');
+          return null;
+        }
+        return all.items.first.id;
+      }
+
+      test('未登录时三个接口都是 401 与「请先登录」', () async {
+        String? none;
+        final HistoryApi anonymous = HistoryApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => none),
+        );
+        addTearDown(anonymous.dispose);
+
+        for (final Future<void> Function() call in <Future<void> Function()>[
+          anonymous.fetchHistory,
+          () => anonymous.remove(1),
+          anonymous.clear,
+        ]) {
+          await expectLater(
+            call(),
+            throwsA(
+              isA<ApiException>()
+                  .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                  .having((ApiException e) => e.message, 'message', '请先登录'),
+            ),
+          );
+        }
+      });
+
+      test('未登录浏览不会留下任何历史', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+
+        // 用匿名客户端走详情页那条路径：匿名浏览必须照常计数，
+        // 但不能因为「没有身份」而随便记在谁头上
+        final int? count = await api.recordView(id);
+        expect(count, isNotNull, reason: '匿名浏览仍应正常计数，不能变成 401');
+
+        expect((await history.fetchHistory()).total, 0);
+      });
+
+      test('看过之后出现在历史里，且嵌套知识字段完整', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+
+        final PagedResult<HistoryItem> page = await history.fetchHistory();
+        expect(page.total, 1);
+
+        final HistoryItem item = page.items.single;
+        expect(item.knowledgeId, id);
+        // 字段名漂移（后端叫 category_name、客户端读 categoryName 之类）
+        // 只有对着真实后端跑才会暴露 —— 假后端是按客户端预期写的
+        expect(item.knowledge.title, isNotEmpty, reason: '标题解析为空，字段名可能已漂移');
+        expect(item.knowledge.categoryName, isNot('未分类'));
+        expect(item.isBroken, isFalse);
+      });
+
+      test('viewed_at 按 UTC 解释，不会偏出几个小时', () async {
+        // 这条守的是一个**不会报错**的坑：后端存的是 naive UTC，
+        // pydantic 序列化出来不带 Z。客户端若直接 DateTime.parse，
+        // 在 UTC+8 的机器上会被当成本地时间，刚看过的记录显示成 8 小时前。
+        // 界面上只是数字不对，日志里一行错误都没有。
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+
+        final HistoryItem item = (await history.fetchHistory()).items.single;
+
+        expect(item.viewedAt, isNotNull);
+        expect(
+          DateTime.now().difference(item.viewedAt!).inMinutes.abs(),
+          lessThan(5),
+          reason: '时区解释错了的话这里会差 480 分钟',
+        );
+      });
+
+      test('重复看同一条只有一行，且时间会刷新', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+        final DateTime? first =
+            (await history.fetchHistory()).items.single.viewedAt;
+
+        await Future<void>.delayed(const Duration(milliseconds: 1100));
+        await authedApi.recordView(id);
+
+        final PagedResult<HistoryItem> page = await history.fetchHistory();
+        expect(page.total, 1, reason: '同一条知识反复看不应堆成一长串');
+        expect(
+          page.items.single.viewedAt!.isAfter(first!),
+          isTrue,
+          reason: '再看一次应当把时间往前推，否则「最近看过」是错的',
+        );
+      });
+
+      test('删除一条之后就没了，再删一次也是成功', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+
+        await history.remove(id);
+        expect((await history.fetchHistory()).total, 0);
+
+        // 幂等：用户要的是「这条不在我的历史里」，这个状态已经成立了
+        await history.remove(id);
+      });
+
+      test('清空之后列表为空', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+
+        await history.clear();
+        expect((await history.fetchHistory()).total, 0);
+      });
+
+      test('看不到别人的浏览历史', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+
+        // 换一个全新账号：看过什么、什么时候看的，都不该被别人读到
+        String? otherToken;
+        final AuthApi other = AuthApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => otherToken),
+        );
+        addTearDown(other.dispose);
+
+        final String name =
+            'lhis${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+        otherToken = (await other.register(
+          username: name,
+          password: accountPassword,
+        ))
+            .token;
+
+        final HistoryApi otherHistory = HistoryApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => otherToken),
+        );
+        addTearDown(otherHistory.dispose);
+
+        expect((await otherHistory.fetchHistory()).total, 0);
+        expect(
+          (await history.fetchHistory()).total,
+          1,
+          reason: '本人那条不该被别人的清空或查看影响',
+        );
+
+        await history.clear();
+      });
+
+      test('看一条不存在的知识不会留下历史', () async {
+        final int? id = await firstPublishedId();
+        if (id == null) return;
+
+        await history.clear();
+        await authedApi.recordView(id);
+
+        // recordView 刻意吞掉异常：计数失败不该把一次正常阅读变成错误页
+        expect(await authedApi.recordView(999999), isNull);
+        expect((await history.fetchHistory()).total, 1);
+
+        await history.clear();
       });
     },
     skip: enabled

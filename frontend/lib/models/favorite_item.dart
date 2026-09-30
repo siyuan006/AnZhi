@@ -1,3 +1,4 @@
+import '../core/relative_time.dart';
 import 'knowledge_item.dart';
 
 /// 安知 —— 收藏记录数据模型
@@ -40,7 +41,7 @@ class FavoriteItem {
     return FavoriteItem(
       id: (json['id'] as num?)?.toInt() ?? 0,
       knowledgeId: knowledgeId,
-      createdAt: DateTime.tryParse(json['created_at'] as String? ?? ''),
+      createdAt: parseServerTime(json['created_at'] as String?),
       // 兜底而不是抛异常：一条解析不了的数据不该让整个收藏页打不开。
       knowledge: nested is Map<String, dynamic>
           ? KnowledgeItem.fromJson(nested)

@@ -4,6 +4,7 @@ import '../core/app_constants.dart';
 import '../core/app_theme.dart';
 import '../core/auth_controller.dart';
 import 'favorites_page.dart';
+import 'history_page.dart';
 import 'login_page.dart';
 
 /// 安知 —— 我的页面
@@ -42,7 +43,7 @@ class ProfilePage extends StatelessWidget {
               _MenuItem(
                 icon: Icons.history_rounded,
                 label: '浏览历史',
-                onTap: () => _openLoginFirst(context, '浏览历史'),
+                onTap: () => _openHistory(context),
               ),
               _MenuItem(
                 icon: Icons.article_outlined,
@@ -96,11 +97,14 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
-  /// 打开「我的收藏」。
+  /// 打开「我的收藏」「浏览历史」这类**需要登录**的页面。
   ///
-  /// 未登录时**先推登录页，登录成功就顺势把收藏页打开** ——
+  /// 未登录时**先推登录页，登录成功就顺势把目标页打开** ——
   /// 用户点的是「我的收藏」，意图是明确的，不该让他回来再点一次。
-  Future<void> _openFavorites(BuildContext context) async {
+  Future<void> _openAfterLogin(
+    BuildContext context,
+    Widget Function() page,
+  ) async {
     final AuthController? auth = AuthScope.maybeOf(context);
     if (auth == null) return;
 
@@ -112,36 +116,17 @@ class ProfilePage extends StatelessWidget {
       if (!context.mounted || !auth.isLoggedIn) return;
     }
 
+    if (!context.mounted) return;
     await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => const FavoritesPage()),
+      MaterialPageRoute<void>(builder: (_) => page()),
     );
   }
 
-  /// 需要登录、但页面还没实现的入口。
-  ///
-  /// 未登录时**推登录页而不是弹一句「请先登录」** ——
-  /// 用户点了这一项，意图是明确的，此时直接给他登录入口
-  /// 比让他自己回头去找要顺手得多。
-  Future<void> _openLoginFirst(BuildContext context, String feature) async {
-    final AuthController? auth = AuthScope.maybeOf(context);
-    if (auth == null) return;
+  Future<void> _openFavorites(BuildContext context) =>
+      _openAfterLogin(context, () => const FavoritesPage());
 
-    if (auth.isLoggedIn) {
-      // 浏览历史页属阶段 11c，此时如实说明，不做假页面
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('「$feature」页面即将在此版本的后续提交里接入'),
-          behavior: SnackBarBehavior.floating,
-          duration: const Duration(seconds: 2),
-        ),
-      );
-      return;
-    }
-
-    await Navigator.of(context).push<bool>(
-      MaterialPageRoute<bool>(builder: (_) => const LoginPage()),
-    );
-  }
+  Future<void> _openHistory(BuildContext context) =>
+      _openAfterLogin(context, () => const HistoryPage());
 
   void _showAbout(BuildContext context) {
     showDialog<void>(

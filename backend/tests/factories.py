@@ -9,7 +9,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from app.database.init_db import seed_categories
-from app.models import Comment, Favorite, Knowledge, Post, User
+from app.models import Comment, Favorite, History, Knowledge, Post, User
 
 
 def prepare_categories(db: Session) -> None:
@@ -82,3 +82,15 @@ def make_favorite(**overrides: object) -> Favorite:
     payload: dict[str, object] = {"user_id": 1, "knowledge_id": 1}
     payload.update(overrides)
     return Favorite(**payload)  # type: ignore[arg-type]
+
+
+def make_history(**overrides: object) -> History:
+    """构造一条浏览历史。
+
+    `viewed_at` 不显式传入时由模型默认值（utcnow）填上。
+    想验证排序的用例应当显式传时间，否则同一批记录的
+    `viewed_at` 会撞在同一时刻，排序结果不可预期。
+    """
+    payload: dict[str, object] = {"user_id": 1, "knowledge_id": 1}
+    payload.update(overrides)
+    return History(**payload)  # type: ignore[arg-type]
