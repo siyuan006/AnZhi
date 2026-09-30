@@ -41,8 +41,7 @@
 
 | 未完成项 | 现状 | 计划阶段 |
 |---|---|---|
-| 知识卡片内容 | 表已建但**为空**：内容必须走「AI 初稿 → 人工审核 → 发布」 | 7 |
-| 数据查询接口 | 表已建好，但还没有 `/api/knowledge` 等读取接口 | 7 |
+| 内容发布状态 | 12 条初稿已入库但**均为「待审核」**：`/api/knowledge` 因此如实返回空 | 待人工审核 |
 | 前后端通信 | Flutter 仍读本地占位数据 | 7 |
 | DeepSeek AI 问答 | `/api/health` 返回 `ai_service: "not_configured"` | 8 |
 
@@ -243,7 +242,7 @@ uvicorn app.main:app --reload
 
 ```bash
 cd backend
-.venv\Scripts\python.exe -m pytest      # 56 passed
+.venv\Scripts\python.exe -m pytest      # 96 passed
 ```
 
 ### API 配置
@@ -256,6 +255,30 @@ cp .env.example .env
 
 > `.env` 不存在时后端**仍可正常启动**，健康检查会如实报告
 > `ai_service: "not_configured"`，不会崩溃也不会伪造状态。
+
+### 知识内容审核流程
+
+知识卡片遵循 `AI 生成初稿 → 人工审核 → 发布`（PROJECT_SPEC 第十五节）。
+初稿默认**不发布**，因此刚建库时 `GET /api/knowledge` 会如实返回空列表。
+
+```bash
+cd backend
+
+# 1. 导入初稿（12 条，全部为「待审核」状态）
+.venv\Scripts\python.exe -m app.database.review --import-drafts
+
+# 2. 查看待审核内容
+.venv\Scripts\python.exe -m app.database.review --list-pending
+
+# 3. 逐条审核后发布（补充 source 权威出处后再发布更稳妥）
+.venv\Scripts\python.exe -m app.database.review --publish 1,2,3
+
+# 4. 发现问题时撤回
+.venv\Scripts\python.exe -m app.database.review --unpublish 2
+```
+
+> 未发布的内容在接口层一律视为不存在（详情接口返回 404 而非 403），
+> 因此不会出现「能看到标题但打不开」的情况。
 
 ---
 

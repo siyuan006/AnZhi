@@ -128,6 +128,19 @@ V1.0 固定六个分类，初始化时写入种子数据。
 > **内容安全（PROJECT_SPEC 第十五节）：** 知识卡片流程为 `AI 生成初稿 → 人工审核 → 发布`。
 > `is_published` 默认为 `false`，**未经人工审核的内容不得对外可见**。高风险安全知识禁止自动发布。
 
+**内容来源与发布：** 初稿见 `backend/app/database/knowledge_drafts.py`，
+经审核工具导入与发布：
+
+```bash
+cd backend
+.venv\Scripts\python.exe -m app.database.review --import-drafts   # 导入，全部为未发布
+.venv\Scripts\python.exe -m app.database.review --list-pending    # 查看待审核
+.venv\Scripts\python.exe -m app.database.review --publish 1,2,3   # 审核后发布
+```
+
+`GET /api/knowledge` 只返回 `is_published = true` 的记录，因此发布状态直接决定
+接口能查到多少内容。`source` 字段留空的条目在发布时会被提示补充权威出处。
+
 ---
 
 ### 3.4 `favorites` —— 收藏表
