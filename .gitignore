@@ -28,8 +28,11 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+# 注意：切勿写成裸的 lib/ 或 lib64/ ——
+# 那会误伤 frontend/lib/（Flutter 源码目录），导致整个应用源码无法提交。
+# 这里限定到 backend/ 下，只作用于 Python 虚拟环境产物。
+backend/lib/
+backend/lib64/
 parts/
 sdist/
 var/
