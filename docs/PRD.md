@@ -47,12 +47,20 @@
   "answer": "...",
   "steps": ["...", "..."],
   "sources": ["..."],
+  "references": [
+    { "id": 3, "title": "...", "summary": "...", "category_id": 1, "risk_level": "high" }
+  ],
   "warning": "..."
 }
 ```
 
 结构化是刚需而非装饰：`risk_level` 决定展示方式，`steps` 是可直接执行的步骤，
 `warning` 在高风险时必须前置显示。
+
+`sources` 与 `references` 都叫「来源」，但可信度完全不同，界面上分两栏：
+`sources` 是**模型自己写的**公开依据，无法核实；`references` 是后端从
+本项目知识库检索到的**已发布卡片**，每条带 id，点开就是原文。
+前者为空是常态，后者为空也是常态（知识库没有相关内容时整栏不显示）。
 
 ### 3.2 三级风险系统
 
@@ -227,6 +235,6 @@ M2  FastAPI + SQLite + 前后端通信
 M3  DeepSeek + AI 安全控制
 M4  知识系统 + 收藏 + 历史
 M5  社区 + 个性化
-M6  RAG + 测试 + UI 优化
+M6  知识库检索（关键词）+ 测试 + UI 优化
 M7  APK 打包 + GitHub Release
 ```

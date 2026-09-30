@@ -103,6 +103,7 @@ class FakeBackend {
     'answer': '先确保自身安全，再判断是否能够撤离。',
     'steps': <String>['立即报警', '低姿撤离', '不要乘坐电梯'],
     'sources': <String>[],
+    'references': <Map<String, dynamic>>[],
     'warning': '如已有人受伤，请立即拨打 120。',
   };
 

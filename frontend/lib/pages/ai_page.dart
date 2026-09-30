@@ -5,7 +5,9 @@ import '../core/app_theme.dart';
 import '../models/ai_answer.dart';
 import '../services/api_client.dart';
 import '../services/chat_api.dart';
+import '../services/knowledge_api.dart';
 import '../widgets/risk_badge.dart';
+import 'knowledge_detail_page.dart';
 
 /// 安知 —— AI 安全问答页
 ///
@@ -22,10 +24,14 @@ import '../widgets/risk_badge.dart';
 /// 失败时展示后端返回的中文说明（未配置 Key / 超时 / 限流等），
 /// **不会伪造任何 AI 回答**。
 class AiPage extends StatefulWidget {
-  const AiPage({super.key, this.api});
+  const AiPage({super.key, this.api, this.knowledgeApi});
 
   /// 允许注入，便于测试用假客户端替换真实网络
   final ChatApi? api;
+
+  /// 回答里引用到的知识卡片，点进去读原文时用。
+  /// 为 `null` 时由详情页自行解析（生产路径）。
+  final KnowledgeApi? knowledgeApi;
 
   @override
   State<AiPage> createState() => _AiPageState();
@@ -104,6 +110,18 @@ class _AiPageState extends State<AiPage> {
     _scrollToBottom();
   }
 
+  Future<void> _openReference(KnowledgeReference reference) async {
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute<void>(
+        builder: (_) => KnowledgeDetailPage(
+          knowledgeId: reference.id,
+          preview: reference.toPreview(),
+          api: widget.knowledgeApi,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -140,7 +158,10 @@ class _AiPageState extends State<AiPage> {
                     itemCount: _messages.length + (_sending ? 1 : 0),
                     itemBuilder: (BuildContext context, int index) {
                       if (index == _messages.length) return const _ThinkingBubble();
-                      return _MessageBubble(message: _messages[index]);
+                      return _MessageBubble(
+                        message: _messages[index],
+                        onOpenReference: _openReference,
+                      );
                     },
                   ),
           ),
@@ -301,15 +322,19 @@ class _SafetyNotice extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, required this.onOpenReference});
 
   final ChatMessage message;
+  final void Function(KnowledgeReference reference) onOpenReference;
 
   @override
   Widget build(BuildContext context) {
     if (message.isUser) return _UserBubble(text: message.text);
     if (message.isError) return _ErrorBubble(text: message.text);
-    return _AnswerBubble(answer: message.answer!);
+    return _AnswerBubble(
+      answer: message.answer!,
+      onOpenReference: onOpenReference,
+    );
   }
 }
 
@@ -393,11 +418,16 @@ class _ErrorBubble extends StatelessWidget {
 /// AI 结构化回答气泡
 ///
 /// 高风险回答优先展示 warning 与 steps（PROJECT_SPEC 第十、十一节）：
-/// 生命安全优先 → 可执行步骤 → 知识解释 → 来源。
+/// 生命安全优先 → 可执行步骤 → 知识解释 → 相关知识 → 来源。
+///
+/// 「相关知识」排在「参考来源」之前：前者是人工审核过、可以点开读原文的
+/// 卡片，后者只是模型自己写下的依据，两者的可信度不同，
+/// 因此分开成两栏，而不是混成一个列表。
 class _AnswerBubble extends StatelessWidget {
-  const _AnswerBubble({required this.answer});
+  const _AnswerBubble({required this.answer, required this.onOpenReference});
 
   final AiAnswer answer;
+  final void Function(KnowledgeReference reference) onOpenReference;
 
   @override
   Widget build(BuildContext context) {
@@ -522,7 +552,27 @@ class _AnswerBubble extends StatelessWidget {
               ),
           ],
 
-          // 来源引用（V2.0 RAG 填充）
+          // 知识库检索到的卡片（阶段 14）
+          if (answer.references.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 14),
+            Text(
+              '相关知识',
+              style: theme.textTheme.labelLarge?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 8),
+            for (final KnowledgeReference ref in answer.references)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: _ReferenceTile(
+                  reference: ref,
+                  onTap: () => onOpenReference(ref),
+                ),
+              ),
+          ],
+
+          // 模型自己给出的公开依据
           if (answer.sources.isNotEmpty) ...<Widget>[
             const SizedBox(height: 12),
             const Divider(),
@@ -549,6 +599,63 @@ class _AnswerBubble extends StatelessWidget {
               ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// 一条知识库引用。
+///
+/// 做成可点开的样子（而不是一行灰字）：用户看到「相关知识」时的下一个动作
+/// 就是「这条到底怎么说的」，把原文藏起来等于让他自己去知识页里翻。
+class _ReferenceTile extends StatelessWidget {
+  const _ReferenceTile({required this.reference, required this.onTap});
+
+  final KnowledgeReference reference;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return Material(
+      color: kBackgroundColor,
+      borderRadius: BorderRadius.circular(10),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(10),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      reference.title,
+                      style: const TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w600,
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      reference.categoryName,
+                      style: theme.textTheme.labelSmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              RiskBadge(level: reference.riskLevel, compact: true),
+            ],
+          ),
+        ),
       ),
     );
   }

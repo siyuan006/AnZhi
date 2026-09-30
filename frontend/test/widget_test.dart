@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:anzhi/app.dart';
+import 'package:anzhi/pages/knowledge_detail_page.dart';
+import 'package:anzhi/widgets/main_scaffold.dart';
 
 import 'helpers/fake_backend.dart';
 
@@ -118,6 +120,58 @@ void main() {
 
       expect(find.text('共 2 条知识'), findsOneWidget);
       expect(find.text('识别电信诈骗的五个通用信号'), findsWidgets);
+    });
+  });
+
+  group('从底部导航走到引用的原文（阶段 14）', () {
+    testWidgets('AI 回答里的「相关知识」能一路点到知识详情页', (WidgetTester tester) async {
+      // 这条路径是用户真实走的那条：底部导航 → AI → 提问 → 点引用。
+      // 单独测 AI 页时是把 knowledgeApi 直接递给页面的，
+      // 递不递得进 MainScaffold 是另一回事，所以这里从头走一遍。
+      await tester.binding.setSurfaceSize(const Size(800, 1600));
+      addTearDown(() => tester.binding.setSurfaceSize(null));
+
+      final FakeBackend backend = FakeBackend();
+      backend.chatAnswer = <String, dynamic>{
+        ...backend.chatAnswer,
+        'references': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'id': 2,
+            'title': '识别电信诈骗的五个通用信号',
+            'summary': '要求转账、索要验证码、制造紧迫感。',
+            'category_id': 5,
+            'risk_level': 'medium',
+          },
+        ],
+      };
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: MainScaffold(
+            knowledgeApi: backend.api(),
+            chatApi: backend.chatApi(),
+            postApi: backend.postApi(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('AI').last);
+      await tester.pumpAndSettle();
+
+      // 这条示例问题只有 AI 页有，首页那条措辞不同
+      await tester.tap(find.text('电动车可以在楼道充电吗？'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('识别电信诈骗的五个通用信号'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(KnowledgeDetailPage), findsOneWidget);
+      expect(
+        backend.requests.any((Uri url) => url.path == '/api/knowledge/2'),
+        isTrue,
+        reason: '点开引用应当去取那一条的原文',
+      );
     });
   });
 }

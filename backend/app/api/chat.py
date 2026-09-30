@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
 
+from app.database.session import get_db
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.schemas.common import ErrorResponse
 from app.services.ai.chat_service import ChatService
@@ -53,20 +55,21 @@ STATUS_BY_FAILURE: dict[AIFailure, int] = {
 )
 async def chat(
     payload: ChatRequest,
+    db: Session = Depends(get_db),
     service: ChatService = Depends(get_chat_service),
 ) -> ChatResponse:
     """向 DeepSeek 提问并返回结构化回答。
 
-    **安全说明：** 回答由 DeepSeek 生成，当前只经过结构性校验
-    （字段是否齐全、风险等级是否可识别、中高风险是否带警告）。
-    PROJECT_SPEC 第三十七节要求的 SafetyGuard 内容审查属于阶段 9，
-    在那之前**不应把本接口的输出当作已通过安全审查的结论**。
+    作答前先到知识库检索相关卡片（PROJECT_SPEC 第十四节 V1.5），
+    检索结果既拼进提示词，也作为 `references` 返回给客户端。
+    检索**不需要登录**：与浏览知识一样，安全问答不设登录墙。
     """
     try:
         return await service.ask(
             message=payload.message,
             category=payload.category,
             history=payload.history,
+            db=db,
         )
     except AIServiceError as exc:
         # 只把面向用户的说明返回给客户端；

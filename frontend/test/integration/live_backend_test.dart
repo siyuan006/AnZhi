@@ -321,6 +321,64 @@ void main() {
         expect(await api.recordView(999999), isNull);
       });
 
+      test('知识引用：响应结构与客户端解析的字段名一致', () async {
+        // 阶段 14 起 /api/chat 会返回 references。没有 Key 时这条链路
+        // 走不到响应体，但**契约**是可以先验的：后端的字段名一旦写成
+        // category_name 而客户端读 categoryId，引用会静默变成「未分类」，
+        // 而这种漂移假后端永远发现不了（它就是按客户端预期写的）。
+        final Object? schema = await raw.getJson('/openapi.json');
+        final Map<String, dynamic> components =
+            (schema! as Map<String, dynamic>)['components']
+                as Map<String, dynamic>;
+        final Map<String, dynamic> schemas =
+            components['schemas'] as Map<String, dynamic>;
+
+        final Map<String, dynamic> response =
+            schemas['ChatResponse'] as Map<String, dynamic>;
+        final Map<String, dynamic> properties =
+            response['properties'] as Map<String, dynamic>;
+        expect(properties.keys, contains('references'));
+
+        final Map<String, dynamic> reference =
+            schemas['ChatReference'] as Map<String, dynamic>;
+        final Map<String, dynamic> referenceProperties =
+            reference['properties'] as Map<String, dynamic>;
+        expect(
+          referenceProperties.keys,
+          containsAll(<String>[
+            'id',
+            'title',
+            'summary',
+            'category_id',
+            'risk_level',
+          ]),
+        );
+      });
+
+      test('知识引用：配置了 Key 时，每条引用都能按 id 读回原文', () async {
+        // 这条才是端到端的：引用不能只是几个字符串，必须点得开。
+        final Object? health = await raw.getJson('/api/health');
+        final bool configured =
+            (health! as Map<String, dynamic>)['ai_service'] == 'configured';
+        if (!configured) {
+          markTestSkipped('未配置 DEEPSEEK_API_KEY，引用往返未验证');
+          return;
+        }
+
+        final AiAnswer answer = await chat.ask('宿舍发生火灾怎么办？');
+        for (final KnowledgeReference reference in answer.references) {
+          expect(reference.id, greaterThan(0));
+          expect(reference.title, isNotEmpty);
+
+          // 关键一步：拿 id 去取原文。取不到说明引用指向了不存在
+          // 或未发布的卡片 —— 那等于给了用户一个点不开的来源。
+          final KnowledgeItem detail = await api.fetchKnowledgeDetail(
+            reference.id,
+          );
+          expect(detail.title, reference.title);
+        }
+      });
+
       test('AI 问答：空问题返回 422，且客户端能读出可读原因', () async {
         // 这条测试守的是一个真实踩过的坑：后端 422 的响应体结构
         // （errors[0].message）一旦变化，客户端只会退化成

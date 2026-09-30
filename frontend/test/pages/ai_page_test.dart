@@ -1,5 +1,7 @@
+import 'package:anzhi/core/app_constants.dart';
 import 'package:anzhi/models/ai_answer.dart';
 import 'package:anzhi/pages/ai_page.dart';
+import 'package:anzhi/pages/knowledge_detail_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -22,9 +24,39 @@ void main() {
   Future<void> pumpPage(WidgetTester tester, FakeBackend backend) async {
     await useTallWindow(tester);
     await tester.pumpWidget(
-      MaterialApp(home: AiPage(api: backend.chatApi())),
+      MaterialApp(
+        home: AiPage(
+          api: backend.chatApi(),
+          // 引用要能点进详情页，而详情页会去发真实请求 ——
+          // 不注入的话测试里跑的是失败分支
+          knowledgeApi: backend.api(),
+        ),
+      ),
     );
     await tester.pumpAndSettle();
+  }
+
+  /// 一条真实存在的知识卡片（id 与 [FakeBackend.defaultItems] 对应），
+  /// 用它当引用才能验证「点开读到的是知识库里的原文」
+  const Map<String, dynamic> referenceJson = <String, dynamic>{
+    'id': 1,
+    'title': '宿舍发生火灾如何正确逃生',
+    'summary': '低姿撤离、不乘电梯、不贪恋财物。',
+    'category_id': 1,
+    'risk_level': 'high',
+  };
+
+  FakeBackend backendWithReferences() {
+    final FakeBackend backend = FakeBackend();
+    backend.chatAnswer = <String, dynamic>{
+      ...backend.chatAnswer,
+      // 与引用的分类特意错开：模型自己判的分类和知识库里那条的分类
+      // 本来就是两回事，混在一起断言会分不清看到的是哪一个
+      'category': '校园安全',
+      'sources': <String>['《消防法》'],
+      'references': <Map<String, dynamic>>[referenceJson],
+    };
+    return backend;
   }
 
   group('空状态', () {
@@ -237,6 +269,123 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(backend.chatRequests, hasLength(1));
+    });
+  });
+
+  group('相关知识引用（阶段 14）', () {
+    testWidgets('回答带引用时展示卡片标题与分类', (WidgetTester tester) async {
+      final FakeBackend backend = backendWithReferences();
+      await pumpPage(tester, backend);
+
+      await tester.tap(find.text('宿舍发生火灾怎么办？'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('相关知识'), findsOneWidget);
+      expect(find.text('宿舍发生火灾如何正确逃生'), findsOneWidget);
+      expect(find.text('消防安全'), findsOneWidget);
+    });
+
+    testWidgets('没有引用时不显示「相关知识」这一栏', (WidgetTester tester) async {
+      // 知识库里没有相关内容是正常状态，不该留一个空标题让用户以为出了问题
+      final FakeBackend backend = FakeBackend();
+      await pumpPage(tester, backend);
+
+      await tester.tap(find.text('宿舍发生火灾怎么办？'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('先确保自身安全，再判断是否能够撤离。'), findsOneWidget);
+      expect(find.text('相关知识'), findsNothing);
+      expect(find.text('参考来源'), findsNothing);
+    });
+
+    testWidgets('点开引用进入知识详情页，读到的是知识库原文', (WidgetTester tester) async {
+      final FakeBackend backend = backendWithReferences();
+      await pumpPage(tester, backend);
+
+      await tester.tap(find.text('宿舍发生火灾怎么办？'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('宿舍发生火灾如何正确逃生'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(KnowledgeDetailPage), findsOneWidget);
+      // 详情页真的按 id 取到了那一条，而不是把列表里的第一条硬塞进来
+      expect(
+        backend.requests.any((Uri url) => url.path == '/api/knowledge/1'),
+        isTrue,
+        reason: '应当按引用给出的 id 请求详情',
+      );
+    });
+
+    testWidgets('模型自己写的依据与知识库引用分开展示', (WidgetTester tester) async {
+      // 两者可信度不同：一个是模型说的，一个是能点开读原文的。
+      // 混成一个列表会让用户以为「模型说的」也有据可查。
+      final FakeBackend backend = backendWithReferences();
+      await pumpPage(tester, backend);
+
+      await tester.tap(find.text('宿舍发生火灾怎么办？'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('相关知识'), findsOneWidget);
+      expect(find.text('参考来源'), findsOneWidget);
+      expect(find.text('· 《消防法》'), findsOneWidget);
+    });
+  });
+
+  group('引用模型', () {
+    test('解析后端返回的 references', () {
+      final AiAnswer answer = AiAnswer.fromJson(<String, dynamic>{
+        'question': 'q',
+        'answer': 'a',
+        'references': <Map<String, dynamic>>[referenceJson],
+      });
+
+      expect(answer.references, hasLength(1));
+      expect(answer.references.single.id, 1);
+      expect(answer.references.single.title, '宿舍发生火灾如何正确逃生');
+      expect(answer.references.single.categoryId, 1);
+      expect(answer.references.single.categoryName, '消防安全');
+      expect(answer.references.single.riskLevel, RiskLevel.high);
+    });
+
+    test('字段缺失或结构不对时降级，而不是整条回答解析失败', () {
+      final AiAnswer answer = AiAnswer.fromJson(<String, dynamic>{
+        'question': 'q',
+        'answer': 'a',
+        'references': <dynamic>[
+          '不是对象',
+          <String, dynamic>{'id': 9},
+        ],
+      });
+
+      // 结构不对的条目被跳过，能用的那条仍然保留
+      expect(answer.references, hasLength(1));
+      expect(answer.references.single.id, 9);
+      expect(answer.references.single.title, '');
+      expect(answer.references.single.categoryId, 0);
+      expect(answer.references.single.categoryName, '未分类');
+    });
+
+    test('后端不返回 references 时为空列表，不是 null', () {
+      final AiAnswer answer = AiAnswer.fromJson(<String, dynamic>{
+        'question': 'q',
+        'answer': 'a',
+      });
+
+      expect(answer.references, isEmpty);
+    });
+
+    test('出处可以转成详情页的预览数据', () {
+      final KnowledgeReference reference =
+          KnowledgeReference.fromJson(referenceJson);
+      final preview = reference.toPreview();
+
+      expect(preview.id, 1);
+      expect(preview.title, '宿舍发生火灾如何正确逃生');
+      expect(preview.summary, '低姿撤离、不乘电梯、不贪恋财物。');
+      // 带上分类与风险等级，页头才不会先空着再跳一下
+      expect(preview.categoryName, '消防安全');
+      expect(preview.riskLevel, RiskLevel.high);
     });
   });
 

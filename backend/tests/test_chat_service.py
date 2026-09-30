@@ -16,10 +16,40 @@ from app.schemas.chat import ChatResponse
 from app.services.ai.chat_service import ChatService
 from app.services.ai.deepseek_client import DeepSeekClient
 from app.services.ai.errors import AIFailure, AIServiceError
+from app.services.ai.rag_service import RAGService, RetrievedCard
 from app.services.ai.safety_guard import EMERGENCY_NOTICE
 
 
-def _service_returning(payload: dict | str) -> tuple[ChatService, dict]:
+class _StubRAG(RAGService):
+    """只记录调用、返回固定卡片的检索替身。"""
+
+    def __init__(self, cards: list[RetrievedCard] | None = None) -> None:
+        self._cards = cards or []
+        self.calls: list[str] = []
+
+    def retrieve(self, db, question: str, limit: int = 3) -> list[RetrievedCard]:
+        self.calls.append(question)
+        return list(self._cards)
+
+
+def _card(**overrides: object) -> RetrievedCard:
+    payload: dict[str, object] = {
+        "id": 7,
+        "title": "宿舍火灾逃生要点",
+        "summary": "低姿撤离，不要返回火场取物。",
+        "category_id": 1,
+        "risk_level": "high",
+        "source": None,
+        "score": 1.5,
+    }
+    payload.update(overrides)
+    return RetrievedCard(**payload)  # type: ignore[arg-type]
+
+
+def _service_returning(
+    payload: dict | str,
+    rag: RAGService | None = None,
+) -> tuple[ChatService, dict]:
     """构造一个上游固定返回 [payload] 的服务，并回传捕获到的请求体。"""
     captured: dict = {}
     content = payload if isinstance(payload, str) else json.dumps(payload)
@@ -31,7 +61,7 @@ def _service_returning(payload: dict | str) -> tuple[ChatService, dict]:
         )
 
     client = DeepSeekClient(api_key="sk-test", transport=httpx.MockTransport(handler))
-    return ChatService(client), captured
+    return ChatService(client, rag=rag), captured
 
 
 def _ask(service: ChatService, message: str = "宿舍着火怎么办", **kwargs) -> ChatResponse:
@@ -172,3 +202,57 @@ class TestConfigurationGate:
 
         assert exc.value.reason is AIFailure.NOT_CONFIGURED
         assert service.is_configured is False
+
+
+class TestRetrievalWiring:
+    """阶段 14：检索结果必须真的走进回答链路。
+
+    `retrieve` 自己测得再透，也证明不了 `ChatService` 调用过它 ——
+    这一组守的是这条接线。
+    """
+
+    def test_without_a_session_no_retrieval_happens(self) -> None:
+        rag = _StubRAG([_card()])
+        service, _ = _service_returning({"answer": "x"}, rag=rag)
+
+        response = _ask(service)
+
+        assert rag.calls == []
+        assert response.references == []
+
+    def test_retrieved_cards_are_injected_and_echoed_back(self) -> None:
+        rag = _StubRAG([_card()])
+        service, captured = _service_returning({"answer": "x"}, rag=rag)
+
+        response = _ask(service, db=object())
+
+        prompt = captured["body"]["messages"][1]["content"]
+        assert "宿舍火灾逃生要点" in prompt
+        assert [item.id for item in response.references] == [7]
+        assert response.references[0].category_id == 1
+
+    def test_retrieval_uses_the_question_not_the_history_blob(self) -> None:
+        rag = _StubRAG()
+        service, _ = _service_returning({"answer": "x"}, rag=rag)
+
+        _ask(service, "那电动车呢？", history=["宿舍着火怎么办"], db=object())
+
+        assert rag.calls == ["那电动车呢？"]
+
+    def test_blocked_answer_still_carries_the_references(self) -> None:
+        rag = _StubRAG([_card()])
+        service, _ = _service_returning(
+            {
+                "risk_level": "high",
+                "answer": "火势不大时，可以返回火场取回重要证件。",
+                "steps": ["返回火场取证件"],
+                "sources": ["《消防法》"],
+            },
+            rag=rag,
+        )
+
+        response = _ask(service, db=object())
+
+        assert "返回火场" not in response.answer
+        assert response.sources == []
+        assert [item.id for item in response.references] == [7]

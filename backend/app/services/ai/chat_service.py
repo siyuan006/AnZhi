@@ -20,9 +20,12 @@ from __future__ import annotations
 
 import logging
 
-from app.schemas.chat import ChatResponse
+from sqlalchemy.orm import Session
+
+from app.schemas.chat import ChatReference, ChatResponse
 from app.services.ai.deepseek_client import DeepSeekClient
 from app.services.ai.errors import AIFailure, AIServiceError
+from app.services.ai.rag_service import RAGService, RetrievedCard
 from app.services.ai.safety_guard import SafetyGuard
 
 logger = logging.getLogger("anzhi")
@@ -49,9 +52,11 @@ class ChatService:
         self,
         client: DeepSeekClient | None = None,
         guard: SafetyGuard | None = None,
+        rag: RAGService | None = None,
     ) -> None:
         self._client = client or DeepSeekClient()
         self._guard = guard or SafetyGuard()
+        self._rag = rag or RAGService()
 
     @property
     def is_configured(self) -> bool:
@@ -62,10 +67,14 @@ class ChatService:
         message: str,
         category: str | None = None,
         history: list[str] | None = None,
+        db: Session | None = None,
     ) -> ChatResponse:
         """回答一个安全问题。
 
         失败时抛 [AIServiceError]，由路由层翻译成 HTTP 状态码。
+
+        [db] 用于检索知识库。不传时跳过检索 —— 问答本身不依赖知识库，
+        检索不到内容也照常作答，因此这里是可选参数而不是必填。
         """
         # 多轮上下文只拼接用户侧的提问。
         # 不接受客户端传来的「助手回复」：那等于把模型的历史发言交给客户端伪造，
@@ -75,15 +84,28 @@ class ChatService:
             earlier = "\n".join(f"- {item}" for item in history)
             prompt = f"【该用户此前问过】\n{earlier}\n\n【当前问题】\n{message}"
 
-        raw = await self._client.complete_json(prompt, category)
-        return self._to_response(raw, question=message)
+        cards = self._rag.retrieve(db, message) if db is not None else []
+
+        raw = await self._client.complete_json(prompt, category, cards)
+        return self._to_response(raw, question=message, references=cards)
 
     # ------------------------------------------------------------------
     # 规范化
     # ------------------------------------------------------------------
 
-    def _to_response(self, raw: dict, *, question: str) -> ChatResponse:
-        """把模型返回的任意 JSON 规范化成 [ChatResponse]。"""
+    def _to_response(
+        self,
+        raw: dict,
+        *,
+        question: str,
+        references: list[RetrievedCard] | None = None,
+    ) -> ChatResponse:
+        """把模型返回的任意 JSON 规范化成 [ChatResponse]。
+
+        `references` 不经过 [SafetyGuard]：它不是模型生成的，而是从
+        已发布的知识卡片里检索出来的，模型说什么都不改变这些卡片的真伪。
+        回答被拦下时它同样保留 —— 用户此刻恰恰更需要看到人工审核过的内容。
+        """
         answer = raw.get("answer")
         if not isinstance(answer, str) or not answer.strip():
             # 没有正文的回答没有任何价值，不能包装成「成功」返回
@@ -112,6 +134,16 @@ class ChatService:
             answer=guarded.answer,
             steps=guarded.steps,
             sources=guarded.sources,
+            references=[
+                ChatReference(
+                    id=card.id,
+                    title=card.title,
+                    summary=card.summary,
+                    category_id=card.category_id,
+                    risk_level=card.risk_level,
+                )
+                for card in (references or [])
+            ],
             warning=guarded.warning,
         )
 

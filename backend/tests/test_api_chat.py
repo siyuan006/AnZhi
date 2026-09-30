@@ -8,15 +8,42 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Generator
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.chat import get_chat_service
+from app.database.session import get_db
 from app.main import app
 from app.services.ai.chat_service import ChatService
 from app.services.ai.deepseek_client import DeepSeekClient
+from tests.factories import create_knowledge, prepare_categories
+
+
+@pytest.fixture(autouse=True)
+def temp_db(
+    session_factory: sessionmaker[Session],
+) -> Generator[sessionmaker[Session], None, None]:
+    """把问答接口也指到临时库上。
+
+    阶段 14 起 `/api/chat` 会查知识库，不覆盖 `get_db` 就会去读
+    真实的 backend/anzhi.db —— 测试的断言会随本地数据变化，
+    而且等于让单元测试碰生产库。
+    """
+
+    def _override() -> Generator[Session, None, None]:
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _override
+    yield session_factory
+    app.dependency_overrides.clear()
 
 
 def _service(handler) -> ChatService:
@@ -119,6 +146,7 @@ class TestSuccess:
             "answer",
             "steps",
             "sources",
+            "references",
             "warning",
         }
         assert body["question"] == "宿舍着火怎么办"
@@ -235,3 +263,125 @@ class TestSafetyGuardIsWiredIn:
 
         assert body["answer"] == "立即撤离，切勿返回火场取物。"
         assert len(body["steps"]) == 3
+
+
+class TestKnowledgeRetrieval:
+    """阶段 14：作答前先检索知识库（PROJECT_SPEC 第十四节 V1.5）。
+
+    检索结果有两个去处，两个都得验：
+    拼进提示词（模型看得到）、作为 `references` 返回（用户看得到）。
+    只做前者，用户无法核实回答的依据；只做后者，检索对回答没有任何影响。
+    """
+
+    @pytest.fixture
+    def seeded(self, temp_db: sessionmaker[Session]) -> dict[str, int]:
+        with temp_db() as db:
+            prepare_categories(db)
+            published = create_knowledge(
+                db,
+                title="宿舍火灾逃生要点",
+                summary="低姿撤离，不要返回火场取物。",
+                content="低姿撤离，不要返回火场取物。",
+                risk_level="high",
+                is_published=True,
+            )
+            draft = create_knowledge(
+                db,
+                title="宿舍火灾逃生要点（初稿）",
+                summary="低姿撤离，不要返回火场取物。",
+                content="低姿撤离，不要返回火场取物。",
+                is_published=False,
+            )
+            return {
+                "published": published.id,
+                "draft": draft.id,
+                "category_id": published.category_id,
+            }
+
+    def test_retrieved_card_comes_back_as_a_reference(
+        self, seeded: dict[str, int]
+    ) -> None:
+        service = _upstream({"answer": "立即撤离。", "risk_level": "high"})
+        with _client_with(service) as client:
+            body = client.post("/api/chat", json={"message": "宿舍发生火灾怎么办"}).json()
+
+        assert body["references"] == [
+            {
+                "id": seeded["published"],
+                "title": "宿舍火灾逃生要点",
+                "summary": "低姿撤离，不要返回火场取物。",
+                "category_id": seeded["category_id"],
+                "risk_level": "high",
+            }
+        ]
+
+    def test_unpublished_draft_never_becomes_a_reference(
+        self, seeded: dict[str, int]
+    ) -> None:
+        service = _upstream({"answer": "立即撤离。", "risk_level": "high"})
+        with _client_with(service) as client:
+            body = client.post("/api/chat", json={"message": "宿舍发生火灾怎么办"}).json()
+
+        ids = [item["id"] for item in body["references"]]
+        assert seeded["draft"] not in ids, "未审核的初稿不能当成引用来源递给用户"
+
+    def test_retrieved_cards_are_injected_into_the_prompt(
+        self, seeded: dict[str, int]
+    ) -> None:
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {"message": {"content": '{"answer": "立即撤离。", "risk_level": "high"}'}}
+                    ]
+                },
+            )
+
+        with _client_with(_service(handler)) as client:
+            client.post("/api/chat", json={"message": "宿舍发生火灾怎么办"})
+
+        user_prompt = captured["body"]["messages"][1]["content"]
+        assert "宿舍火灾逃生要点" in user_prompt
+        assert "低姿撤离，不要返回火场取物。" in user_prompt
+        # 不能把卡片塞进 sources —— 那一栏是模型自己写的公开依据，
+        # 系统已经用 references 单独展示了卡片
+        assert "不要把它们写进 sources" in user_prompt
+
+    def test_no_match_yields_no_reference(self, seeded: dict[str, int]) -> None:
+        service = _upstream({"answer": "x", "risk_level": "low"})
+        with _client_with(service) as client:
+            body = client.post("/api/chat", json={"message": "银行卡怎么提额"}).json()
+
+        assert body["references"] == []
+
+    def test_empty_library_still_answers(self, temp_db: sessionmaker[Session]) -> None:
+        service = _upstream({"answer": "x", "risk_level": "low"})
+        with _client_with(service) as client:
+            response = client.post("/api/chat", json={"message": "宿舍发生火灾怎么办"})
+
+        assert response.status_code == 200
+        assert response.json()["references"] == []
+
+    def test_blocked_answer_keeps_the_references(self, seeded: dict[str, int]) -> None:
+        """回答被拦下时，卡片要留下。
+
+        卡片不是模型写的，模型说错话不影响它们的真伪；
+        而回答被拦下恰恰说明用户正在面对危险，此刻更需要人工审核过的内容。
+        """
+        service = _upstream(
+            {
+                "risk_level": "high",
+                "answer": "火势不大时，可以返回火场取回重要证件。",
+                "steps": ["返回火场取证件"],
+                "sources": ["《消防法》"],
+            }
+        )
+        with _client_with(service) as client:
+            body = client.post("/api/chat", json={"message": "宿舍发生火灾怎么办"}).json()
+
+        assert body["sources"] == [], "回答被拦下时它自己写的来源不再可信"
+        assert [item["id"] for item in body["references"]] == [seeded["published"]]

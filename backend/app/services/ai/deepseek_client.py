@@ -22,6 +22,7 @@ import httpx
 from app.config.settings import settings
 from app.services.ai.errors import AIFailure, AIServiceError
 from app.services.ai.prompts import SYSTEM_PROMPT, build_user_prompt
+from app.services.ai.rag_service import RetrievedCard
 
 logger = logging.getLogger("anzhi")
 
@@ -54,7 +55,12 @@ class DeepSeekClient:
     def is_configured(self) -> bool:
         return bool(self._api_key)
 
-    async def complete_json(self, message: str, category: str | None = None) -> dict:
+    async def complete_json(
+        self,
+        message: str,
+        category: str | None = None,
+        references: list[RetrievedCard] | None = None,
+    ) -> dict:
         """请求一次回答，返回解析后的 JSON 对象。
 
         失败一律抛 [AIServiceError]，调用方不需要认识 httpx 的异常体系。
@@ -69,7 +75,7 @@ class DeepSeekClient:
             "model": self._model,
             "messages": [
                 {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(message, category)},
+                {"role": "user", "content": build_user_prompt(message, category, references)},
             ],
             "temperature": TEMPERATURE,
             "max_tokens": MAX_TOKENS,

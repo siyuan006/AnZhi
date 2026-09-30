@@ -1,4 +1,65 @@
 import '../core/app_constants.dart';
+import 'knowledge_item.dart';
+
+/// 安知 —— AI 回答里引用到的知识卡片（阶段 14）
+///
+/// 与 `AiAnswer.sources` 的区别在于**能不能核实**：
+/// `sources` 是模型自己写下的依据，无法验证真假；
+/// 本类的每一条都来自后端知识库中已发布的卡片，带有 id，
+/// 可以点进去读原文。
+class KnowledgeReference {
+  const KnowledgeReference({
+    required this.id,
+    required this.title,
+    this.summary = '',
+    this.categoryId = 0,
+    this.riskLevel = RiskLevel.low,
+  });
+
+  final int id;
+  final String title;
+  final String summary;
+
+  /// 对应 `categories.id`
+  final int categoryId;
+  final RiskLevel riskLevel;
+
+  /// 所属分类，找不到时返回 `null`
+  SafetyCategory? get category => categoryById(categoryId);
+
+  /// 分类显示名，找不到分类时降级为「未分类」
+  String get categoryName => category?.name ?? '未分类';
+
+  /// 转成知识详情页的预览数据。
+  ///
+  /// 详情页有 `preview` 就能先把页头画出来，用户点进去立刻看到
+  /// 自己点的那一条，而不是一个整页的转圈。
+  KnowledgeItem toPreview() => KnowledgeItem(
+        id: id,
+        title: title,
+        categoryId: categoryId,
+        summary: summary,
+        riskLevel: riskLevel,
+      );
+
+  factory KnowledgeReference.fromJson(Map<String, dynamic> json) {
+    return KnowledgeReference(
+      id: (json['id'] as num?)?.toInt() ?? 0,
+      title: json['title'] as String? ?? '',
+      summary: json['summary'] as String? ?? '',
+      categoryId: (json['category_id'] as num?)?.toInt() ?? 0,
+      riskLevel: RiskLevel.fromValue(json['risk_level'] as String?),
+    );
+  }
+
+  Map<String, dynamic> toJson() => <String, dynamic>{
+        'id': id,
+        'title': title,
+        'summary': summary,
+        'category_id': categoryId,
+        'risk_level': riskLevel.value,
+      };
+}
 
 /// 安知 —— AI 回答结构
 ///
@@ -11,6 +72,7 @@ import '../core/app_constants.dart';
 ///   "answer": "...",
 ///   "steps": ["..."],
 ///   "sources": ["..."],
+///   "references": [{"id": 1, "title": "..."}],
 ///   "warning": "..."
 /// }
 /// ```
@@ -26,6 +88,7 @@ class AiAnswer {
     this.riskLevel = RiskLevel.low,
     this.steps = const <String>[],
     this.sources = const <String>[],
+    this.references = const <KnowledgeReference>[],
     this.warning,
   });
 
@@ -39,8 +102,12 @@ class AiAnswer {
   /// 可执行步骤。高风险问题应非空（PROJECT_SPEC 第十一节）
   final List<String> steps;
 
-  /// 来源引用。V1.0 可为空，V2.0 RAG 填充（第四十三节）
+  /// 模型给出的公开依据。**无法核实**，界面上要与 [references] 分开呈现
   final List<String> sources;
+
+  /// 后端从知识库检索到的卡片（PROJECT_SPEC 第十四节 V1.5）。
+  /// 知识库没有相关内容时为空 —— 空不代表出错
+  final List<KnowledgeReference> references;
 
   /// 安全警告。medium / high 时应非空
   final String? warning;
@@ -56,6 +123,7 @@ class AiAnswer {
       riskLevel: RiskLevel.fromValue(json['risk_level'] as String?),
       steps: _stringList(json['steps']),
       sources: _stringList(json['sources']),
+      references: _referenceList(json['references']),
       warning: json['warning'] as String?,
     );
   }
@@ -67,6 +135,9 @@ class AiAnswer {
         'risk_level': riskLevel.value,
         'steps': steps,
         'sources': sources,
+        'references': <Map<String, dynamic>>[
+          for (final KnowledgeReference item in references) item.toJson(),
+        ],
         'warning': warning,
       };
 
@@ -74,6 +145,15 @@ class AiAnswer {
   static List<String> _stringList(dynamic value) {
     if (value is! List) return const <String>[];
     return value.whereType<String>().toList(growable: false);
+  }
+
+  /// 容错解析引用数组，跳过结构不对的条目而不是整条回答解析失败
+  static List<KnowledgeReference> _referenceList(dynamic value) {
+    if (value is! List) return const <KnowledgeReference>[];
+    return <KnowledgeReference>[
+      for (final dynamic item in value)
+        if (item is Map<String, dynamic>) KnowledgeReference.fromJson(item),
+    ];
   }
 }
 

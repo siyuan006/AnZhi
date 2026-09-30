@@ -26,10 +26,10 @@
                                    │
                             ┌──────┴──────┐
                             ▼             ▼
-                      ┌──────────┐  ┌──────────┐
-                      │ DeepSeek │  │   RAG    │
-                      │   API    │  │ (V2.0)   │
-                      └──────────┘  └──────────┘
+                      ┌──────────┐  ┌──────────────┐
+                      │ DeepSeek │  │ RAGService   │
+                      │   API    │  │ 知识检索      │
+                      └──────────┘  └──────────────┘
 ```
 
 **关键约束：** DeepSeek API Key 只存在于后端 `.env`，Flutter 端不持有任何第三方密钥。
@@ -48,11 +48,12 @@ backend/
 │   ├── schemas/             Pydantic 模型：请求 / 响应数据结构与校验
 │   ├── services/            业务逻辑层
 │   │   ├── ai/
-│   │   │   ├── chat_service.py      调用 DeepSeek（V1.0）
-│   │   │   ├── agent_service.py     问题分类（预留）
-│   │   │   ├── risk_service.py      风险判断（预留）
-│   │   │   ├── rag_service.py       知识检索（预留）
-│   │   │   └── safety_guard.py      回答安全审查（预留）
+│   │   │   ├── deepseek_client.py   DeepSeek HTTP 调用与 JSON 解析
+│   │   │   ├── chat_service.py      问答编排：检索 → 调用 → 规范化 → 审查
+│   │   │   ├── prompts.py           系统提示词与用户提示词拼装
+│   │   │   ├── rag_service.py       知识检索（V1.5，关键词加权匹配）
+│   │   │   ├── safety_guard.py      回答安全审查（V1.0，确定性规则）
+│   │   │   └── errors.py            对上游失败的中文翻译
 │   │   ├── knowledge/               知识卡片业务逻辑
 │   │   ├── community/               社区：帖子 / 评论 / 点赞
 │   │   ├── personalization/         个性化设置（关注分类、首页模块）
@@ -126,22 +127,29 @@ frontend/lib/
 用户问题 → FastAPI → ChatService → DeepSeek → 返回
 ```
 
-### V1.5
+### V1.5 —— ✅ 已实现
 
 ```text
-用户问题 → 安全知识库检索 → DeepSeek → 返回（带来源）
+用户问题 → RAGService 关键词检索 → 拼进提示词 → DeepSeek → SafetyGuard → 返回
+                                      ↓
+                              references（可点开的原文）
 ```
 
-### V2.0
+检索只查 `is_published = true` 的卡片，命中结果既注入提示词，也作为
+`references` 单独返回。**它是关键词加权匹配，不是语义检索**：
+中文按二元切分，标题 6 / 摘要 3 / 正文 1 加权，低于阈值丢弃。
+换一种不含公共字词的说法就可能检索不到 —— 详见 README 的说明。
+
+### V2.0 —— 未实现
 
 ```text
 用户问题
    ↓
-AgentService      问题分类
+AgentService      问题分类（独立成层）
    ↓
-RiskService       风险判断（low / medium / high）
+RiskService       风险判断（low / medium / high）独立成层
    ↓
-RAGService        知识库检索
+RAGService        语义检索（Embedding + 向量库）
    ↓
 DeepSeek          生成回答
    ↓
@@ -150,8 +158,11 @@ SafetyGuard       安全审查
 结构化回答 + 来源引用
 ```
 
-**V1.0 只实现 ChatService。** 其余模块在 `services/ai/` 下预留文件与接口签名，
-但不实现具体逻辑 —— 预留结构不等于虚假实现，未实现的模块必须明确标注。
+**当前实现的是 V1.0 + V1.5。** 风险判断目前不单独成层 ——
+它由提示词约束 + `SafetyGuard` 的「等级只抬不降」规则共同保证
+（见第 5 节）；问题分类同样交给模型在提示词内完成。
+把它们拆成独立服务需要新的模型调用，属于架构变更，
+按 AI_RULES 第五节需先说明理由并等待确认，因此没有擅自铺开。
 
 ---
 
@@ -229,8 +240,8 @@ services/ 使用
 
 | 扩展 | 预留位置 | 阶段 |
 |---|---|---|
-| RAG 向量检索 | `services/ai/rag_service.py` | V2.0 |
-| 风险判断 Agent | `services/ai/risk_service.py` | V2.0 |
+| RAG 语义检索（Embedding + 向量库） | `services/ai/rag_service.py` 的 `RAGService.retrieve()` —— 接口形状不变，换掉打分实现即可 | V2.0，需先确认技术栈 |
+| 风险判断 Agent | 目前由提示词 + `safety_guard.py` 的等级规则承担 | V2.0 |
 | SSE 流式回答 | `api/chat.py` 新增 `/api/chat/stream` | V2.0 |
 | PostgreSQL | `database/` 换连接串 | V1.x |
 | AI 社区审核 | `services/ai/` 新增审核服务 | V2.0 |

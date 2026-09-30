@@ -67,13 +67,50 @@ JSON 结构如下：
 """
 
 
-def build_user_prompt(message: str, category: str | None = None) -> str:
+REFERENCE_USAGE = """【使用要求】
+- 参考以上卡片作答，但不要照抄原文；卡片没讲到的部分，只说你确实有把握的内容。
+- 卡片由系统单独展示给用户，**不要把它们写进 sources**。
+- sources 仍然只填公开依据（法律法规、国家标准、官方机构名称），没有把握就留空数组。
+- 卡片不改变风险等级判断：该是 high 就仍然是 high。
+"""
+
+
+def build_reference_block(references) -> str:
+    lines = ["【知识库检索结果】"]
+    for index, card in enumerate(references, start=1):
+        lines.append(f"{index}. {card.title}（风险等级 {card.risk_level}）")
+        if card.summary:
+            lines.append(f"   摘要：{card.summary}")
+        if card.source:
+            lines.append(f"   来源：{card.source}")
+    lines.append("")
+    lines.append(REFERENCE_USAGE)
+    return "\n".join(lines)
+
+
+def build_user_prompt(
+    message: str,
+    category: str | None = None,
+    references=None,
+) -> str:
     """拼装用户消息。
 
     指定分类时直接告诉模型，省去一次分类判断；
     [category] 来自请求参数，属于用户输入的一部分，
     因此这里只是拼进提示词，不承担任何安全职责。
+
+    [references] 是检索到的知识卡片（[RetrievedCard]）。它们的正文不进提示词，
+    只给标题与摘要：摘要是一段写完整的短述，按固定字数截断正文则可能
+    在句子中间断开，把半句话当作依据交给模型。
     """
+    blocks: list[str] = []
+    if references:
+        blocks.append(build_reference_block(references))
     if category:
-        return f"【用户指定分类：{category}】\n\n用户问题：{message}"
-    return f"用户问题：{message}"
+        blocks.append(f"【用户指定分类：{category}】")
+
+    if not blocks:
+        return f"用户问题：{message}"
+
+    blocks.append(f"用户问题：{message}")
+    return "\n\n".join(blocks)

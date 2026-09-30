@@ -88,7 +88,7 @@ class _MainScaffoldState extends State<MainScaffold> {
             isActive: _currentIndex == 0,
             api: widget.knowledgeApi,
           ),
-          AiPage(api: widget.chatApi),
+          AiPage(api: widget.chatApi, knowledgeApi: widget.knowledgeApi),
           KnowledgePage(api: widget.knowledgeApi),
           CommunityPage(api: widget.postApi),
           const ProfilePage(),

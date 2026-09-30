@@ -54,6 +54,21 @@ class ChatRequest(BaseModel):
         return cleaned[-MAX_HISTORY_ITEMS:]
 
 
+class ChatReference(BaseModel):
+    """回答参考到的知识卡片。
+
+    与 `sources` 的区别是**出处**：`sources` 是模型自己写的公开依据，
+    无法核实；本结构里的每一条都来自本项目知识库中 `is_published` 为真
+    的卡片，可以由 id 反查原文（PROJECT_SPEC 第四十七节第 20 项）。
+    """
+
+    id: int = Field(..., description="知识卡片 id，可用于跳转详情")
+    title: str = Field(..., description="卡片标题")
+    summary: str = Field("", description="卡片摘要")
+    category_id: int = Field(..., description="所属分类 id")
+    risk_level: str = Field(..., description="卡片自身的风险等级")
+
+
 class ChatResponse(BaseModel):
     """结构化回答（PROJECT_SPEC 第九节）。
 
@@ -71,7 +86,11 @@ class ChatResponse(BaseModel):
     )
     sources: list[str] = Field(
         default_factory=list,
-        description="来源引用。V1.0 可为空，V2.0 由 RAG 填充",
+        description="模型给出的公开依据。与 `references` 不同，这一项无法核实",
+    )
+    references: list[ChatReference] = Field(
+        default_factory=list,
+        description="检索到的知识库卡片，可能为空（知识库中没有相关内容时）",
     )
     warning: str | None = Field(
         None,
