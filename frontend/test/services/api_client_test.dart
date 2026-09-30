@@ -43,6 +43,40 @@ void main() {
       expect(sent.queryParameters.containsKey('keyword'), isFalse);
       expect(sent.queryParameters['page'], '1');
     });
+
+    test('列表值发成重复的同名参数', () async {
+      final FakeBackend backend = FakeBackend();
+
+      await backend.client().getJson(
+        '/api/knowledge',
+        query: <String, dynamic>{
+          'prefer_categories': <int>[1, 5],
+        },
+      );
+
+      final Uri sent = backend.requests.single;
+      // `[1, 5].toString()` 会变成 "[1, 5]"，后端按 list[int] 解析直接 422；
+      // 拼成 "1,5" 则要求后端拆字符串，"传了 abc 要 422" 这类校验会丢掉
+      expect(sent.queryParametersAll['prefer_categories'], <String>['1', '5']);
+    });
+
+    test('空列表等同于不传', () async {
+      final FakeBackend backend = FakeBackend();
+
+      await backend.client().getJson(
+        '/api/knowledge',
+        query: <String, dynamic>{
+          'prefer_categories': <int>[],
+        },
+      );
+
+      // 硬发一个空的 `?prefer_categories=` 会被后端当成空字符串解析成 int 失败，
+      // 而「一个领域都没关注」是完全正常的状态，不该让列表打不开
+      expect(
+        backend.requests.single.queryParametersAll.containsKey('prefer_categories'),
+        isFalse,
+      );
+    });
   });
 
   group('错误翻译', () {

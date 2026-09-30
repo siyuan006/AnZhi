@@ -64,6 +64,48 @@ void main() {
       );
     });
 
+    test('关注分类作为重复参数发出去', () async {
+      final FakeBackend backend = FakeBackend();
+
+      await backend.api().fetchKnowledge(preferCategoryIds: <int>[1, 5]);
+
+      expect(
+        backend.requests.single.queryParametersAll['prefer_categories'],
+        <String>['1', '5'],
+      );
+    });
+
+    test('不传关注分类时不带这个参数', () async {
+      final FakeBackend backend = FakeBackend();
+
+      await backend.api().fetchKnowledge();
+
+      expect(
+        backend.requests.single.queryParametersAll.containsKey(
+          'prefer_categories',
+        ),
+        isFalse,
+      );
+    });
+
+    test('关注分类只改变顺序，不会把别的领域筛掉', () async {
+      // 假后端照搬后端的两组排序规则，因此这条能真正验证行为而不只是参数
+      final FakeBackend backend = FakeBackend();
+
+      final PagedResult<KnowledgeItem> before =
+          await backend.api().fetchKnowledge();
+      final PagedResult<KnowledgeItem> after =
+          await backend.api().fetchKnowledge(preferCategoryIds: <int>[5]);
+
+      expect(after.total, before.total, reason: '关注不等于筛选');
+      expect(after.items.first.categoryId, 5, reason: '关注的那个排到最前');
+      expect(
+        after.items.map((KnowledgeItem i) => i.id).toSet(),
+        before.items.map((KnowledgeItem i) => i.id).toSet(),
+        reason: '内容一条没少，只是顺序变了',
+      );
+    });
+
     test('列表项不含正文（列表接口不返回 content）', () async {
       final PagedResult<KnowledgeItem> result =
           await FakeBackend().api().fetchKnowledge();

@@ -856,7 +856,7 @@ class FakeBackend {
     }
 
     if (path == '/api/knowledge') {
-      return _json(_filtered(request.url.queryParameters), 200);
+      return _json(_filtered(request.url.queryParametersAll), 200);
     }
 
     // POST /api/knowledge/{id}/view —— 与真实的写接口分开处理，
@@ -1290,32 +1290,64 @@ class FakeBackend {
     return jsonDecode(utf8.decode(request.bodyBytes)) as Map<String, dynamic>;
   }
 
-  /// 模拟服务端筛选，返回统一分页结构
-  Map<String, dynamic> _filtered(Map<String, String> query) {
+  /// 模拟服务端筛选，返回统一分页结构。
+  ///
+  /// 收的是 `queryParametersAll` 而不是 `queryParameters`：
+  /// 后者遇到重复的同名参数只留下最后一个，`prefer_categories`
+  /// 这种可以传多次的参数会被悄悄吞掉。
+  Map<String, dynamic> _filtered(Map<String, List<String>> query) {
+    String? one(String key) => query[key]?.first;
+
     Iterable<Map<String, dynamic>> result = items;
 
-    final String? categoryId = query['category_id'];
+    final String? categoryId = one('category_id');
     if (categoryId != null) {
       result = result.where((item) => '${item['category_id']}' == categoryId);
     }
 
-    final String? riskLevel = query['risk_level'];
+    final String? riskLevel = one('risk_level');
     if (riskLevel != null) {
       result = result.where((item) => item['risk_level'] == riskLevel);
     }
 
-    final String? keyword = query['keyword'];
+    final String? keyword = one('keyword');
     if (keyword != null) {
       result = result.where((item) =>
           '${item['title']}'.contains(keyword) ||
           '${item['summary']}'.contains(keyword));
     }
 
+    final List<int> preferred = <int>[
+      for (final String raw in query['prefer_categories'] ?? const <String>[])
+        if (int.tryParse(raw) != null) int.parse(raw),
+    ];
+
     final List<Map<String, dynamic>> list = result.toList();
+
+    // 关注分类优先，与后端 `knowledge_service._preference_rank` 同一套规则：
+    // 分两组，组内保持原有先后。不这么做的话，「首页推荐知识把关注方向
+    // 排在前面」这件事在 widget 测试里根本验不了。
+    if (preferred.isNotEmpty) {
+      final List<MapEntry<int, Map<String, dynamic>>> indexed =
+          list.asMap().entries.toList()
+            ..sort((a, b) {
+              int rank(Map<String, dynamic> item) =>
+                  preferred.contains(item['category_id']) ? 0 : 1;
+              // 用下标兜底：`List.sort` 不保证稳定，
+              // 不写这一句的话同组内的先后会随机变。
+              return rank(a.value) != rank(b.value)
+                  ? rank(a.value) - rank(b.value)
+                  : a.key - b.key;
+            });
+      list
+        ..clear()
+        ..addAll(indexed.map((entry) => entry.value));
+    }
+
     return <String, dynamic>{
       'total': list.length,
-      'page': int.tryParse(query['page'] ?? '1') ?? 1,
-      'page_size': int.tryParse(query['page_size'] ?? '20') ?? 20,
+      'page': int.tryParse(one('page') ?? '1') ?? 1,
+      'page_size': int.tryParse(one('page_size') ?? '20') ?? 20,
       'items': list,
     };
   }

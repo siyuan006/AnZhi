@@ -23,10 +23,16 @@ class KnowledgeApi {
   /// 否则「第 1 页 20 条」里筛出来的结果数会和 `total` 对不上。
   ///
   /// [categoryId] 为空表示全部分类；[keyword] 为空表示不搜索。
+  ///
+  /// [preferCategoryIds] 是**排序偏好而不是筛选**：传了它，这些分类的
+  /// 内容排在前面，其余的照常返回，`total` 也不变。关注一个领域
+  /// 不该让用户看不到别的领域（`docs/API.md` 第 4 节）。
+  /// 传空列表与不传等价。
   Future<PagedResult<KnowledgeItem>> fetchKnowledge({
     int? categoryId,
     String? keyword,
     String? riskLevel,
+    List<int>? preferCategoryIds,
     int page = 1,
     int pageSize = 20,
   }) async {
@@ -36,6 +42,7 @@ class KnowledgeApi {
         'category_id': categoryId,
         'keyword': keyword,
         'risk_level': riskLevel,
+        'prefer_categories': preferCategoryIds,
         'page': page,
         'page_size': pageSize,
       },

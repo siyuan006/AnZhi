@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Select, func, or_, select, update
+from sqlalchemy import ColumnElement, Select, case, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.category import Category
@@ -82,12 +82,27 @@ def count_knowledge(
     return total or 0
 
 
+def _preference_rank(
+    prefer_category_ids: list[int],
+) -> ColumnElement[int]:
+    """把关注分类的内容排到前面。
+
+    用 `CASE` 分两组（0 = 关注的、1 = 其余的），组内仍按发布时间倒序。
+    没有写成「只查关注分类」：那会让用户在关注之后**看不到**其他内容，
+    而关注的本意是调整先看到什么，不是把别的内容藏起来
+    （PROJECT_SPEC 第十八节、四十二节）。
+    """
+    ids = sorted(set(prefer_category_ids))
+    return case((Knowledge.category_id.in_(ids), 0), else_=1)
+
+
 def list_knowledge(
     db: Session,
     *,
     category_id: int | None = None,
     risk_level: str | None = None,
     keyword: str | None = None,
+    prefer_category_ids: list[int] | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> list[Knowledge]:
@@ -95,11 +110,20 @@ def list_knowledge(
 
     排序里带上 `id` 作为第二关键字：同一天发布的多篇内容
     `created_at` 可能完全相同，只按时间排序时翻页会出现重复或漏项。
+
+    `prefer_category_ids` 只改变**顺序**，不改变条数 ——
+    因此 `count_knowledge` 里没有对应的参数。
     """
     conditions = _filters(category_id, risk_level, keyword)
+    order_by: list[ColumnElement[object]] = []
+    if prefer_category_ids:
+        order_by.append(_preference_rank(prefer_category_ids))
+    order_by.append(Knowledge.created_at.desc())
+    order_by.append(Knowledge.id.desc())
+
     stmt = (
         _base_query(conditions)
-        .order_by(Knowledge.created_at.desc(), Knowledge.id.desc())
+        .order_by(*order_by)
         .offset((page - 1) * page_size)
         .limit(page_size)
     )

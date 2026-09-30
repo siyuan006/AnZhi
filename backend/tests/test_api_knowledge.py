@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -337,3 +339,164 @@ class TestRecordView:
 
     def test_missing_id_returns_404(self, api_client: TestClient) -> None:
         assert api_client.post("/api/knowledge/9999/view").status_code == 404
+
+
+def _seed_with_times(session_factory: sessionmaker[Session]) -> dict[str, int]:
+    """按**显式时间**预置四篇已发布内容，返回「标题 → id」。
+
+    时间必须显式给：同一批插入的 `created_at` 会撞在同一时刻，
+    排序结果就只能靠 `id` 兜底，测出来的东西说不清是偏好生效了
+    还是碰巧插得对。
+
+    时间顺序与分类交错，默认排序和偏好排序才会明显不同：
+
+        01-04  D  交通(3)     默认第一条是 D
+        01-03  C  消防(1)
+        01-02  B  用电(2)
+        01-01  A  消防(1)
+    """
+    rows = [
+        ("A", 1, datetime(2026, 1, 1)),
+        ("B", 2, datetime(2026, 1, 2)),
+        ("C", 1, datetime(2026, 1, 3)),
+        ("D", 3, datetime(2026, 1, 4)),
+    ]
+    with session_factory() as db:
+        prepare_categories(db)
+        ids: dict[str, int] = {}
+        for title, category_id, created_at in rows:
+            item = create_knowledge(
+                db,
+                title=title,
+                category_id=category_id,
+                is_published=True,
+                created_at=created_at,
+            )
+            ids[title] = item.id
+    return ids
+
+
+def _titles(response_body: dict[str, object]) -> list[str]:
+    items = response_body["items"]
+    assert isinstance(items, list)
+    return [item["title"] for item in items]
+
+
+class TestPreferCategories:
+    """GET /api/knowledge?prefer_categories=…
+
+    关注领域要真的改变首页「推荐知识」的先后，否则那个开关就是个摆设
+    （PROJECT_SPEC 第十八节、四十二节）。
+    """
+
+    def test_preferred_categories_come_first(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        _seed_with_times(session_factory)
+
+        body = api_client.get(
+            "/api/knowledge", params={"prefer_categories": 1}
+        ).json()
+
+        assert _titles(body) == ["C", "A", "D", "B"]
+
+    def test_without_the_parameter_the_order_is_untouched(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        _seed_with_times(session_factory)
+
+        body = api_client.get("/api/knowledge").json()
+
+        assert _titles(body) == ["D", "C", "B", "A"], "不传就还是纯按时间倒序"
+
+    def test_it_reorders_but_does_not_filter(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """偏好是**排序**不是筛选：关注消防不等于看不到别的领域。"""
+        _seed_with_times(session_factory)
+
+        body = api_client.get(
+            "/api/knowledge", params={"prefer_categories": 1}
+        ).json()
+
+        assert body["total"] == 4, "条数不该因为偏好而变少"
+        assert sorted(_titles(body)) == ["A", "B", "C", "D"], "四条一条不少"
+
+    def test_multiple_preferred_categories_are_not_ranked_among_themselves(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """关注两个领域时，它们之间仍按时间排，而不是按传参的先后。
+
+        传的是 `2,3`，若实现成「按给定顺序排」，B 会跑到 D 前面。
+        """
+        _seed_with_times(session_factory)
+
+        body = api_client.get(
+            "/api/knowledge", params=[("prefer_categories", 2), ("prefer_categories", 3)]
+        ).json()
+
+        assert _titles(body) == ["D", "B", "C", "A"]
+
+    def test_pagination_stays_consistent(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """偏好进了 ORDER BY，翻页才不会出现重复或漏项。"""
+        _seed_with_times(session_factory)
+
+        first = api_client.get(
+            "/api/knowledge",
+            params={"prefer_categories": 1, "page": 1, "page_size": 2},
+        ).json()
+        second = api_client.get(
+            "/api/knowledge",
+            params={"prefer_categories": 1, "page": 2, "page_size": 2},
+        ).json()
+
+        assert first["total"] == second["total"] == 4
+        assert _titles(first) == ["C", "A"]
+        assert _titles(second) == ["D", "B"]
+
+    def test_filter_still_wins(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """筛选条件优先：不能因为偏好了消防，就把交通的内容也带出来。
+
+        把 `CASE` 错写成 `or_(category_id == X, category_id.in_(prefer))`
+        就会走到这一步。
+        """
+        _seed_with_times(session_factory)
+
+        body = api_client.get(
+            "/api/knowledge", params={"category_id": 3, "prefer_categories": 1}
+        ).json()
+
+        assert body["total"] == 1
+        assert _titles(body) == ["D"]
+
+    def test_unknown_category_id_is_ignored(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """认不出的 id 当没传处理，不报错。
+
+        这与 `PUT /api/settings` 里「分类不存在就 404」不同：
+        那边是用户在**写入**一个指向不存在资源的引用，必须拦下；
+        这边只是排序偏好，为一个不认识的 id 让整个知识列表打不开，
+        代价远大于收益。
+        """
+        _seed_with_times(session_factory)
+
+        response = api_client.get("/api/knowledge", params={"prefer_categories": 999})
+
+        assert response.status_code == 200
+        assert _titles(response.json()) == ["D", "C", "B", "A"]
+
+    def test_non_integer_is_rejected(self, api_client: TestClient) -> None:
+        response = api_client.get("/api/knowledge", params={"prefer_categories": "abc"})
+
+        assert response.status_code == 422
+
+    def test_zero_is_rejected(self, api_client: TestClient) -> None:
+        """分类 id 从 1 开始，0 不是「不传」的另一种写法。"""
+        response = api_client.get("/api/knowledge", params={"prefer_categories": 0})
+
+        assert response.status_code == 422

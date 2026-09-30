@@ -279,12 +279,30 @@ class ApiClient {
   ///
   /// 不能把 `category_id=null` 发给后端：FastAPI 会按字符串 "null" 解析，
   /// 直接返回 422，表现为「不选分类反而报错」。
-  Map<String, String> _cleanQuery(Map<String, dynamic>? query) {
-    if (query == null) return <String, String>{};
+  ///
+  /// 值为 `Iterable` 时发成**重复的同名参数**（`?k=1&k=2`）：
+  /// `toString()` 会得到 `[1, 2]` 这种带方括号的串，后端按 `list[int]`
+  /// 解析必然 422；拼成 `1,2` 则要求后端自己拆字符串，参数类型从
+  /// `int` 掉成 `str`，「传了 `abc` 要 422」这类校验就全丢了。
+  Map<String, dynamic> _cleanQuery(Map<String, dynamic>? query) {
+    if (query == null) return <String, dynamic>{};
 
-    final Map<String, String> result = <String, String>{};
+    final Map<String, dynamic> result = <String, dynamic>{};
     query.forEach((String key, dynamic value) {
       if (value == null) return;
+
+      if (value is Iterable) {
+        final List<String> values = <String>[
+          for (final Object? item in value)
+            if (item != null) item.toString(),
+        ];
+        // 空列表与不传等价。硬发一个空的 `?k=` 会被后端当成空字符串，
+        // 按 int 解析直接 422 —— 而「没有关注的分类」是完全正常的状态。
+        if (values.isEmpty) return;
+        result[key] = values;
+        return;
+      }
+
       final String text = value.toString();
       if (text.isEmpty) return;
       result[key] = text;

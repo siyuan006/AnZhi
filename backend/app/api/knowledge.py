@@ -5,9 +5,10 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import Field
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user
@@ -50,6 +51,12 @@ def list_knowledge(
         None, description="按风险等级筛选"
     ),
     keyword: str | None = Query(None, max_length=50, description="标题/简介模糊搜索"),
+    # `ge=1` 必须写在**元素**上：写成 `Query(None, ge=1)` 时 FastAPI 会把
+    # 整个列表当成一个值去比大小，直接抛 TypeError → 500。
+    prefer_categories: Annotated[
+        list[Annotated[int, Field(ge=1)]] | None,
+        Query(description="关注分类的 id，可重复传；只调整排序，不作为筛选"),
+    ] = None,
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页条数"),
     db: Session = Depends(get_db),
@@ -58,6 +65,10 @@ def list_knowledge(
 
     未发布内容不会出现在结果里（PROJECT_SPEC 第十五节），
     因此内容审核状态会直接影响这个接口的返回条数。
+
+    `prefer_categories` 是**排序偏好而不是筛选条件**：给了它，
+    这些分类的内容排在前面，其余的照样返回，`total` 也不变 ——
+    关注一个领域不该让用户看不到别的领域。
     """
     total = knowledge_service.count_knowledge(
         db, category_id=category_id, risk_level=risk_level, keyword=keyword
@@ -67,6 +78,7 @@ def list_knowledge(
         category_id=category_id,
         risk_level=risk_level,
         keyword=keyword,
+        prefer_category_ids=prefer_categories,
         page=page,
         page_size=page_size,
     )

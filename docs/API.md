@@ -70,7 +70,11 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
   响应**一律翻译成中文提示**，页面只处理一种异常类型
 - **AI 问答超时 60 秒**（`ApiConfig.aiTimeout`）。大模型生成一段回答通常要十几秒，
   沿用 10 秒会让绝大多数正常提问被误判为超时
-- 值为 `null` 或空串的查询参数会被剔除，避免后端收到 `category_id=null` 而返回 422
+- 值为 `null`、空串或**空列表**的查询参数会被剔除，避免后端收到
+  `category_id=null` 或空串而返回 422
+- 值为列表时发成**重复的同名参数**（`?prefer_categories=1&prefer_categories=5`），
+  不拼成 `1,5`：后者要求后端自己拆字符串，参数类型从 `int` 掉成 `str`，
+  「传了 `abc` 要 422」这类校验就全丢了（见第 4 节）
 - 错误提示优先取后端 `errors[0].message`，其次 `detail`，最后才退化成
   「请求失败（HTTP xxx）」—— **不要展示纯状态码**，用户看不懂
 - 后端只返回 `is_published = true` 的内容，客户端必须正确处理「成功但为空」
@@ -269,7 +273,27 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
 | `category_id` | int | 按分类筛选 |
 | `risk_level` | string | 按风险等级筛选 |
 | `keyword` | string | 标题/简介模糊搜索 |
+| `prefer_categories` | int，**可重复传** | 关注分类的 id，只调整排序，不作为筛选 |
 | `page` / `page_size` | int | 分页 |
+
+**`prefer_categories` 是排序偏好，不是筛选条件。**
+
+传了它，这些分类的内容排在前面，**其余的照常返回，`total` 也不变**——
+关注一个领域不该让用户看不到别的领域（PROJECT_SPEC 第十八节、四十二节）。
+因此：
+
+- 它**不进** `count_knowledge`，条数只由 `category_id` / `risk_level` / `keyword` 决定
+- 与 `category_id` 同时传时，**筛选优先**：`?category_id=3&prefer_categories=1`
+  只返回分类 3 的内容，偏好不会把分类 1 的内容也带出来
+- 认不出的 id（如 `?prefer_categories=999`）**当作没传**，返回 200 而不是报错。
+  这与第 8 节里「分类不存在就 404」不同：那边是用户在**写入**一个指向不存在
+  资源的引用，必须拦下；这边只是排序偏好，为一个不认识的 id 让整个知识列表
+  打不开，代价远大于收益
+- 只影响先后，组内仍按 `created_at` 倒序；关注多个领域时它们之间也按时间排，
+  不按传参的先后
+- 类型错误（`?prefer_categories=abc`、`?prefer_categories=0`）仍然是 `422`
+
+首页「推荐知识」就是靠它把用户关注的领域排到最前的（第 9 节）。
 
 **响应 200：**
 
