@@ -30,12 +30,12 @@
 | 14 | RAG | ✅ 已完成（知识库检索引用；关键词匹配而非语义检索，原因见下） |
 | 15 | 测试 | ✅ 已完成（前后端全量 + 真实后端联调 + 异常情况逐条审计） |
 | 16 | UI 优化 | ✅ 已完成（小屏与大字号适配 + 状态页补齐 + 取色收敛） |
-| 17 | APK 打包 | ⬜ 待开始 |
+| 17 | APK 打包 | ✅ 已完成（release 包可安装；应用名与图标、签名配置、后端地址注入） |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识库检索引用 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 完整的社区互动（浏览 / 评论 / 点赞 / 发帖 / 删帖）+ 个性化（关注领域 / 首页布局 / 通知设置）。**
+**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识库检索引用 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 完整的社区互动（浏览 / 评论 / 点赞 / 发帖 / 删帖）+ 个性化（关注领域 / 首页布局 / 通知设置）+ 可安装的 release APK。**
 
-- 前端：可编译、可运行，已产出 debug APK；首页、知识页、知识详情页、AI 问答页、登录注册页、我的收藏页、浏览历史页、社区页、帖子详情页、发帖页、我的帖子页、我的页、关注领域页、首页布局页、通知设置页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态。AI 回答里的「相关知识」可一路点进知识详情页读原文
+- 前端：可编译、可运行，已产出 release APK（49.1 MB，应用名「安知」，见下方「APK 打包」）；首页、知识页、知识详情页、AI 问答页、登录注册页、我的收藏页、浏览历史页、社区页、帖子详情页、发帖页、我的帖子页、我的页、关注领域页、首页布局页、通知设置页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态。AI 回答里的「相关知识」可一路点进知识详情页读原文
 - 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/knowledge/{id}`、`/api/knowledge/{id}/view`、`/api/chat`、`/api/auth/*`、`/api/favorites`、`/api/history`、`/api/posts`、`/api/posts/mine`、`/api/posts/{id}/comments`、`/api/posts/{id}/like`、`/api/settings` 已实测返回正确响应
 - 数据库：`backend/anzhi.db` 已建全部 9 张表，六大分类种子数据已写入
 - 联调：前端 366 个测试 + 后端 547 个测试全部通过；另有 70 个「真实后端」集成测试（默认跳过；开启后 43 通过 / 27 如实跳过，跳过的是依赖「知识库已发布内容」与「已配置 API Key」的那几组，而非空跑）
@@ -331,12 +331,13 @@ Flutter  ──→  FastAPI  ──→  .env  ──→  DeepSeek API
 cd frontend
 flutter pub get
 flutter analyze        # 静态检查
-flutter test           # 运行测试（316 passed，另有 59 个真实后端测试默认跳过）
+flutter test           # 运行测试（366 passed，另有 70 个真实后端测试默认跳过）
 flutter run            # 连接真机/模拟器运行
 flutter build apk --debug    # 构建 APK
 ```
 
 产物路径：`frontend/build/app/outputs/flutter-apk/app-debug.apk`
+正式包（release）见下方「APK 打包（阶段 17）」。
 
 **后端地址：** App 默认连接 `http://10.0.2.2:8000`（Android 模拟器访问宿主机的固定地址），
 开箱即用。真机调试时后端在电脑上，需显式指定电脑的局域网 IP：
@@ -515,6 +516,128 @@ flutter test test/integration/live_backend_test.dart --dart-define=ANZHI_LIVE_BA
 另外把三处各抄了一份的提示卡收敛成 `NoticeCard`，并把四处硬编码颜色
 改回主题取色（`a0c779e`）——同一个「次要文字」角色此前有两种来源
 （写死的 `0xFF9AA4B2` 与 `colorScheme.onSurfaceVariant`），主题一变就对不上。
+
+---
+
+## APK 打包（阶段 17）
+
+### 产物
+
+```bash
+cd frontend
+flutter build apk --release
+# → build\app\outputs\flutter-apk\app-release.apk
+```
+
+| 构建方式 | 产物 | 体积 |
+|---|---|---|
+| 默认（通用包） | `app-release.apk` | 49.1 MB |
+| `--split-per-abi` | `app-arm64-v8a-release.apk` | 17.0 MB |
+| | `app-armeabi-v7a-release.apk` | 14.6 MB |
+| | `app-x86_64-release.apk` | 18.5 MB |
+
+通用包一个文件能装到任何手机上，适合放进 Release 供人下载；`--split-per-abi`
+把体积压到约三分之一，但要求下载的人自己认机型（2018 年以后的手机基本是
+`arm64-v8a`）。
+
+包信息：`applicationId` = `com.anzhi.anzhi`，`versionName` = 1.0.0，
+`versionCode` = 1，`minSdk` = 24（Android 7.0），`targetSdk` = 36。
+
+### 应用名与图标
+
+`android/app/src/main/res/values/strings.xml` 里的 `app_name` 就是桌面上的名字
+（「安知」）。此前 manifest 里写死的是小写拼音 `anzhi`，于是桌面显示拼音、
+App 内部显示中文 —— 这类问题只有装到真机、或 `aapt dump badging` 才看得见，
+widget 测试里看不见（`kAppName` 管不到 Android 资源）。
+
+图标是品牌蓝底白色盾牌，`tool/generate_app_icon.py` 可重新生成全部尺寸
+（需要 Pillow）。它同时产出传统图标（48/72/96/144/192）和 API 26+ 的
+自适应图标前景层，后者交给系统的圆形 / 方形 / squircle 遮罩。
+
+### 后端地址
+
+APK 里的后端地址是**编译期注入**的，App 内没有运行时设置项：
+
+```bash
+flutter build apk --release --dart-define=ANZHI_API_BASE_URL=http://127.0.0.1:8000
+```
+
+不传 `--dart-define` 时用默认值 `http://10.0.2.2:8000` —— 那是 Android
+**模拟器**访问宿主机的固定地址，装到真机上连不上。
+
+真机连本机后端的完整流程：
+
+```bash
+# 1. 手机 USB 连电脑，开启 USB 调试
+adb reverse tcp:8000 tcp:8000
+
+# 2. 电脑上启动后端
+cd backend
+.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+# 3. 构建并安装（构建时把地址指到 127.0.0.1）
+cd ..\frontend
+flutter build apk --release --dart-define=ANZHI_API_BASE_URL=http://127.0.0.1:8000
+adb install -r build\app\outputs\flutter-apk\app-release.apk
+```
+
+`adb reverse` 把手机的 `127.0.0.1:8000` 转发到电脑的 8000 端口，因此手机不必和
+电脑在同一个 Wi-Fi 下，也不必知道电脑的 IP。它是**一次性**的：拔掉数据线重插
+之后要重新执行一遍。
+
+> **为什么不用局域网 IP？** 正式包的白名单在
+> `android/app/src/main/res/xml/network_security_config.xml` 里，只对
+> `10.0.2.2` / `127.0.0.1` / `localhost` 放行明文 HTTP，其余地址一律强制
+> HTTPS。要连 `http://192.168.x.x:8000`，得先把那个 IP 加进这份白名单再重新
+> 构建。`flutter run`（debug 包）不受此限制，局域网 IP 直接可用。
+
+> **本项目的后端没有公网部署。** 所以拿到 APK 的人必须先自己把后端跑起来，
+> 或者由部署方按上面的方式，构建一个指向自己服务器的包。APK 本身不含后端。
+
+### 签名
+
+`android/app/build.gradle.kts` 的 release 构建有两种走法：
+
+| 条件 | 使用哪个签名 |
+|---|---|
+| `android/key.properties` 存在 | 用其中的 keystore 签名 |
+| 不存在 | 沿用 debug 签名 |
+
+仓库里**没有** `key.properties`（`android/.gitignore` 已忽略它，以及
+`*.jks` / `*.keystore` / `*.p12` / `*.pfx`），因此现在直接构建出来的是
+**debug 签名**的包：能装、能联调，但不适合正式分发 —— 同一个 `applicationId`
+下换了签名，用户必须先卸载旧版才能装新版。
+
+要出正式包，自己生成一份密钥（口令自己定，**不要写进仓库**）。
+在 `frontend/android/` 下执行，密钥就落在 `.gitignore` 覆盖得到的位置：
+
+```bash
+cd frontend\android
+keytool -genkeypair -v -keystore upload-keystore.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+```
+
+然后新建 `frontend/android/key.properties`（与密钥同级）：
+
+```properties
+storePassword=<你的口令>
+keyPassword=<你的口令>
+keyAlias=upload
+storeFile=../upload-keystore.jks
+```
+
+`storeFile` 相对 `android/app/` 解析（也可以写绝对路径）。
+
+> `keytool` 不一定在 PATH 上（JDK 装在非默认目录时会这样）。
+> 找不到就直接用 JDK 或 Android Studio 自带的那份：
+> `<JDK>\bin\keytool.exe` 或 `<Android Studio>\jbr\bin\keytool.exe`。
+
+### 安装
+
+```bash
+adb install -r build\app\outputs\flutter-apk\app-release.apk
+```
+
+也可以把 APK 传到手机上点击安装（需在系统设置里允许「安装未知来源应用」）。
 
 ---
 
