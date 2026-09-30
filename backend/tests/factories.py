@@ -63,3 +63,11 @@ def make_comment(**overrides: object) -> Comment:
     }
     payload.update(overrides)
     return Comment(**payload)  # type: ignore[arg-type]
+
+
+def create_knowledge(db: Session, **overrides: object) -> Knowledge:
+    """构造并**立即落库**一篇知识卡片，返回该对象。"""
+    item = make_knowledge(**overrides)
+    db.add(item)
+    db.commit()
+    return item

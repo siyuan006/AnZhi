@@ -12,9 +12,10 @@ from sqlalchemy import (
     Text,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, TimestampMixin
+from app.models.category import Category
 
 #: 允许的风险等级，与前端 RiskLevel 枚举、PROJECT_SPEC 第十节一致
 RISK_LEVELS: tuple[str, ...] = ("low", "medium", "high")
@@ -63,6 +64,11 @@ class Knowledge(Base, TimestampMixin):
     is_published: Mapped[bool] = mapped_column(
         Boolean, nullable=False, default=False, server_default=text("0")
     )
+
+    # lazy="joined"：取知识卡片时顺带 JOIN 出分类。
+    # 列表接口需要显示分类名，若用默认的懒加载会产生 N+1 次查询
+    # （20 条数据 21 次 SQL）。这里的 JOIN 成本远低于多跑 20 次查询。
+    category: Mapped["Category"] = relationship(lazy="joined")
 
     def __repr__(self) -> str:
         return (

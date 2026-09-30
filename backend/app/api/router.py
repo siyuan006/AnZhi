@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from app.api import health
+from app.api import health, knowledge
 
 api_router = APIRouter()
 api_router.include_router(health.router)
+api_router.include_router(knowledge.router)
 
 # 后续阶段在此追加：
-#   第六阶段  api_router.include_router(knowledge.router)   # 知识卡片 / 分类
 #   第八阶段  api_router.include_router(chat.router)        # AI 问答
 #   第十一阶段 api_router.include_router(favorite.router)    # 收藏 / 历史
 #   第十二阶段 api_router.include_router(community.router)   # 社区
