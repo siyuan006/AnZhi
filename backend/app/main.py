@@ -84,23 +84,64 @@ async def root() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+# pydantic 会在消息前加上校验器的内部前缀，对用户没有意义
+_MESSAGE_PREFIXES = ("Value error, ", "Assertion failed, ")
+
+
+def _clean_message(raw: object) -> str:
+    """把 pydantic 的错误消息整理成可以直接展示给用户的文本。"""
+    text = str(raw or "请求参数不合法").strip()
+    for prefix in _MESSAGE_PREFIXES:
+        if text.startswith(prefix):
+            return text[len(prefix) :].strip()
+    return text
+
+
+def _serialize_errors(exc: RequestValidationError) -> list[dict[str, str]]:
+    """把校验错误整理成稳定、可序列化的结构。
+
+    不直接返回 `exc.errors()`，原因有两个：
+
+    1. **它不一定能序列化。** 自定义校验器抛 ValueError 时，
+       pydantic 会把异常对象本身放进 `ctx`，`json.dumps` 会直接报
+       `TypeError: Object of type ValueError is not JSON serializable`，
+       于是本该返回 422 的请求变成 500。
+    2. **它是 pydantic 的内部结构。** 字段名与层级会随版本变化，
+       而 `ctx` 里还可能带着用户原始输入。对外应该给一份我们自己定义的契约。
+
+    因此统一输出 `[{"field", "message", "type"}]`，
+    客户端只需要读 `errors[0].message`（见 docs/API.md 1.1）。
+    """
+    return [
+        {
+            "field": ".".join(str(part) for part in error.get("loc", ()) if part != "body")
+            or "body",
+            "message": _clean_message(error.get("msg")),
+            "type": str(error.get("type", "")),
+        }
+        for error in exc.errors()
+    ]
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(
     _request: Request, exc: RequestValidationError
 ) -> JSONResponse:
     """把 FastAPI 默认的 422 详情转换成统一错误结构（docs/API.md 1.1）。
 
-    默认结构是嵌套的数组，前端解析麻烦；这里压平成一句可读的说明，
-    同时把原始详情放进 `errors` 便于排查。
+    默认结构是嵌套数组且包含不可序列化的内部对象；
+    这里压平成一句可读的说明，并把逐字段详情放进 `errors`。
     """
-    first = exc.errors()[0] if exc.errors() else {}
-    location = ".".join(str(part) for part in first.get("loc", []) if part != "body")
-    message = first.get("msg", "请求参数不合法")
-    detail = f"参数校验失败：{location} {message}".strip()
+    errors = _serialize_errors(exc)
+    if errors:
+        first = errors[0]
+        detail = f"参数校验失败：{first['field']} {first['message']}"
+    else:  # pragma: no cover - pydantic 正常情况下至少给一条
+        detail = "请求参数不合法"
 
     return JSONResponse(
         status_code=422,
-        content={"detail": detail, "errors": exc.errors()},
+        content={"detail": detail, "errors": errors},
     )
 
 

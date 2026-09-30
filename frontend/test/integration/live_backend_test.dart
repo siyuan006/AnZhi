@@ -1,7 +1,9 @@
 import 'package:anzhi/core/app_constants.dart';
+import 'package:anzhi/models/ai_answer.dart';
 import 'package:anzhi/models/knowledge_item.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/services/api_client.dart';
+import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -37,6 +39,13 @@ void main() {
     timeout: const Duration(seconds: 5),
   );
   final KnowledgeApi api = KnowledgeApi(client: raw);
+
+  // 问答用独立的 ApiClient：两个接口对象共用一个底层 client 时，
+  // 任何一个 dispose() 都会把它关掉，让后续用例莫名其妙地「连不上服务器」。
+  // 超时给足 60 秒，与 App 里 ChatApi 的实际配置一致。
+  final ChatApi chat = ChatApi(
+    client: ApiClient(baseUrl: baseUrl, timeout: ApiConfig.aiTimeout),
+  );
 
   group(
     '真实后端',
@@ -147,11 +156,64 @@ void main() {
           ),
         );
       });
+
+      test('AI 问答：未配置 Key 时返回 503 与可读中文，而不是 500', () async {
+        // 这条断言在「没有 Key」时最有价值：它同时验证了
+        //  · 未配置不会崩成 500
+        //  · 用户看到的是能照着做的说明，而不是 stack trace
+        // 配置了 Key 之后本用例会自动改为验证「真实回答可被解析」。
+        final Object? health = await raw.getJson('/api/health');
+        final bool configured =
+            (health! as Map<String, dynamic>)['ai_service'] == 'configured';
+
+        if (!configured) {
+          await expectLater(
+            chat.ask('宿舍发生火灾怎么办？'),
+            throwsA(
+              isA<ApiException>()
+                  .having((ApiException e) => e.statusCode, 'statusCode', 503)
+                  .having(
+                    (ApiException e) => e.message,
+                    'message',
+                    contains('DEEPSEEK_API_KEY'),
+                  ),
+            ),
+          );
+          return;
+        }
+
+        final AiAnswer answer = await chat.ask('宿舍发生火灾怎么办？');
+        expect(answer.answer, isNotEmpty);
+        expect(answer.steps, isNotEmpty, reason: '高风险问题应给出可执行步骤');
+        expect(answer.warning, isNotEmpty, reason: '高风险问题必须带安全警告');
+      });
+
+      test('AI 问答：空问题返回 422，且客户端能读出可读原因', () async {
+        // 这条测试守的是一个真实踩过的坑：后端 422 的响应体结构
+        // （errors[0].message）一旦变化，客户端只会退化成
+        // 「请求失败（HTTP 422）」，用户根本不知道哪里填错了。
+        // 假后端是按客户端预期写的，永远发现不了这种漂移。
+        await expectLater(
+          chat.ask('   '),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 422)
+                .having(
+                  (ApiException e) => e.message,
+                  'message',
+                  isNot(contains('HTTP 422')),
+                ),
+          ),
+        );
+      });
     },
     skip: enabled
         ? false
         : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
   );
 
-  tearDownAll(api.dispose);
+  tearDownAll(() {
+    api.dispose();
+    chat.dispose();
+  });
 }

@@ -3,30 +3,45 @@ import 'package:flutter/material.dart';
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
 import '../models/ai_answer.dart';
+import '../services/api_client.dart';
+import '../services/chat_api.dart';
 import '../widgets/risk_badge.dart';
 
 /// 安知 —— AI 安全问答页
 ///
 /// 项目核心功能之一（PROJECT_SPEC 第八节）。
 ///
-/// ⚠️ 当前状态：**未接入后端**。
-/// 阶段 8「接入 DeepSeek」+ 阶段 9「AI 安全控制」完成后，本页改为：
+/// 链路（阶段 8 接通）：
 ///   用户输入 → POST /api/chat → FastAPI → ChatService → DeepSeek
-///   → SafetyGuard 审查 → 结构化回答 → 本页渲染
+///   → 结构化回答 → 本页渲染
 ///
-/// 在接入前，发送消息会得到明确的「后端未连接」提示，
-/// **不会返回任何伪造的 AI 回答**。
+/// ⚠️ 尚未实现：SafetyGuard 内容审查（PROJECT_SPEC 第三十七节，阶段 9）。
+/// 当前回答只经过**结构性校验**（字段齐全、风险等级可识别、
+/// 中高风险带警告），不等于已通过安全审查。
+///
+/// 失败时展示后端返回的中文说明（未配置 Key / 超时 / 限流等），
+/// **不会伪造任何 AI 回答**。
 class AiPage extends StatefulWidget {
-  const AiPage({super.key});
+  const AiPage({super.key, this.api});
+
+  /// 允许注入，便于测试用假客户端替换真实网络
+  final ChatApi? api;
 
   @override
   State<AiPage> createState() => _AiPageState();
 }
 
 class _AiPageState extends State<AiPage> {
+  late final ChatApi _api = widget.api ?? ChatApi();
+  late final bool _ownsApi = widget.api == null;
+
   final TextEditingController _inputController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final List<ChatMessage> _messages = <ChatMessage>[];
+
+  /// 是否正在等待 AI 回答。等待期间禁止重复发送，
+  /// 否则连续点击会并发发出多个请求。
+  bool _sending = false;
 
   /// 常见问题示例，帮助用户快速上手
   static const List<String> _suggestions = <String>[
@@ -41,6 +56,7 @@ class _AiPageState extends State<AiPage> {
   void dispose() {
     _inputController.dispose();
     _scrollController.dispose();
+    if (_ownsApi) _api.dispose();
     super.dispose();
   }
 
@@ -56,24 +72,35 @@ class _AiPageState extends State<AiPage> {
     });
   }
 
-  void _send([String? preset]) {
+  Future<void> _send([String? preset]) async {
     final String question = (preset ?? _inputController.text).trim();
-    if (question.isEmpty) return;
+    if (question.isEmpty || _sending) return;
 
     setState(() {
       _messages.add(ChatMessage.user(question));
-      // 后端尚未接入，明确告知用户，而不是编造一个回答
-      _messages.add(
-        ChatMessage.error(
-          '后端服务尚未接入。\n\n'
-          'AI 问答功能将在「阶段 8：接入 DeepSeek」与'
-          '「阶段 9：AI 安全控制」完成后启用。\n'
-          '届时会经由 FastAPI 调用 DeepSeek，并由 SafetyGuard 审查后返回结构化回答。',
-        ),
-      );
+      _sending = true;
     });
 
     _inputController.clear();
+    _scrollToBottom();
+
+    try {
+      final AiAnswer answer = await _api.ask(question);
+      if (!mounted) return;
+      setState(() {
+        _messages.add(ChatMessage.assistant(answer));
+        _sending = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      // 后端已经把失败原因翻译成中文（未配置 Key / 超时 / 限流……），
+      // 这里原样展示，不重新编造一句更含糊的提示
+      setState(() {
+        _messages.add(ChatMessage.error(error.message));
+        _sending = false;
+      });
+    }
+
     _scrollToBottom();
   }
 
@@ -85,7 +112,7 @@ class _AiPageState extends State<AiPage> {
         title: const Text('AI 安全助手'),
         actions: <Widget>[
           IconButton(
-            onPressed: _messages.isEmpty
+            onPressed: _messages.isEmpty || _sending
                 ? null
                 : () => setState(() => _messages.clear()),
             icon: const Icon(Icons.delete_outline_rounded),
@@ -109,8 +136,10 @@ class _AiPageState extends State<AiPage> {
                       kPagePadding,
                       16,
                     ),
-                    itemCount: _messages.length,
+                    // 等待回答时多渲染一个「思考中」气泡
+                    itemCount: _messages.length + (_sending ? 1 : 0),
                     itemBuilder: (BuildContext context, int index) {
+                      if (index == _messages.length) return const _ThinkingBubble();
                       return _MessageBubble(message: _messages[index]);
                     },
                   ),
@@ -118,6 +147,7 @@ class _AiPageState extends State<AiPage> {
           _InputBar(
             controller: _inputController,
             onSend: _send,
+            enabled: !_sending,
           ),
         ],
       ),
@@ -529,10 +559,17 @@ class _AnswerBubble extends StatelessWidget {
 // ---------------------------------------------------------------------------
 
 class _InputBar extends StatelessWidget {
-  const _InputBar({required this.controller, required this.onSend});
+  const _InputBar({
+    required this.controller,
+    required this.onSend,
+    this.enabled = true,
+  });
 
   final TextEditingController controller;
   final void Function([String? preset]) onSend;
+
+  /// 等待回答期间置为 false：按钮变灰，回车也不再触发发送
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -557,7 +594,9 @@ class _InputBar extends StatelessWidget {
                 minLines: 1,
                 maxLines: 4,
                 textInputAction: TextInputAction.send,
-                onSubmitted: (_) => onSend(),
+                onSubmitted: (_) {
+                  if (enabled) onSend();
+                },
                 decoration: const InputDecoration(
                   hintText: '描述你的安全问题…',
                   isDense: true,
@@ -569,7 +608,7 @@ class _InputBar extends StatelessWidget {
               width: 46,
               height: 46,
               child: FilledButton(
-                onPressed: () => onSend(),
+                onPressed: enabled ? () => onSend() : null,
                 style: FilledButton.styleFrom(
                   padding: EdgeInsets.zero,
                   minimumSize: const Size(46, 46),
@@ -579,6 +618,46 @@ class _InputBar extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// 等待 AI 回答时的占位气泡。
+///
+/// 必须和「已经拿到回答」在视觉上区分开 ——
+/// 让用户看着一个空白气泡猜「是卡住了还是没回答」是糟糕的体验。
+class _ThinkingBubble extends StatelessWidget {
+  const _ThinkingBubble();
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 14, right: 32),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: kSurfaceColor,
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          const SizedBox(
+            width: 15,
+            height: 15,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          const SizedBox(width: 10),
+          Text(
+            '正在思考…',
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+              fontSize: 13,
+            ),
+          ),
+        ],
       ),
     );
   }

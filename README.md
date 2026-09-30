@@ -19,7 +19,7 @@
 | 5 | FastAPI 后端 | ✅ 已完成 |
 | 6 | SQLite 数据库 | ✅ 已完成 |
 | 7 | 前后端通信 | ✅ 已完成 |
-| 8 | 接入 DeepSeek | ⬜ 待开始 |
+| 8 | 接入 DeepSeek | 🟡 代码已完成，缺 API Key |
 | 9 | AI 安全控制（SafetyGuard） | ⬜ 待开始 |
 | 10 | 知识系统 | ⬜ 待开始 |
 | 11 | 收藏 / 历史记录 | ⬜ 待开始 |
@@ -31,22 +31,36 @@
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通。**
+**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路代码。**
 
-- 前端：可编译、可运行，已产出 debug APK；知识页与首页的知识模块**已改为调用真实接口**，按需显示加载 / 失败 / 空状态
-- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge` 已实测返回正确响应
+- 前端：可编译、可运行，已产出 debug APK；知识页、首页知识模块与 AI 问答页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态
+- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/chat` 已实测返回正确响应
 - 数据库：`backend/anzhi.db` 已建全部 9 张表，六大分类种子数据已写入
-- 联调：前端 50 个测试 + 后端 96 个测试全部通过；另有 8 个「真实后端」集成测试跑通
+- 联调：前端 76 个测试 + 后端 179 个测试全部通过；另有 10 个「真实后端」集成测试跑通
 
 尚未打通的部分（按阶段推进，不做假实现）：
 
 | 未完成项 | 现状 | 计划阶段 |
 |---|---|---|
+| **DeepSeek API Key** | 仓库里没有、也不应该有 Key。`/api/chat` 因此返回 **503 + 中文说明**（而非 500），`/api/health` 返回 `ai_service: "not_configured"`。**AI 问答尚未端到端跑通** | 配置 Key 即可 |
+| SafetyGuard 内容审查 | 回答只经过结构性校验（字段、风险等级、警告），**不等于已通过安全审查** | 9 |
 | 内容发布状态 | 12 条初稿已入库但**均为「待审核」**：`/api/knowledge` 因此如实返回空，App 首页与知识页显示「暂无内容」 | 待人工审核 |
 | 社区帖子 | 仍为占位数据 `lib/core/sample_data.dart`（知识部分的占位数据已删除） | 12 |
 | 知识详情页 | 接口已就绪，页面点击后仍提示「阶段 10 实现」 | 10 |
 | `GET /api/home` 首页聚合接口 | 首页改为直接调用 `/api/knowledge` 取前 5 条 | 13 |
-| DeepSeek AI 问答 | `/api/health` 返回 `ai_service: "not_configured"` | 8 |
+
+> **关于「AI 问答还不能用」：** 阶段 8 完成的是**链路代码**——
+> 用户输入 → `POST /api/chat` → FastAPI → `ChatService` → DeepSeek → 结构化回答 → Flutter 渲染。
+> 这条链路的每一段都有测试覆盖，**唯一没有验证过的是 DeepSeek 本身**：
+> 没有 Key 就无法发一次真实请求。在 `.env` 里配置 `DEEPSEEK_API_KEY` 之后，
+> 需要重新跑一次下面这条命令来确认它真的通了（配置前它会如实报告 503）：
+>
+> ```bash
+> cd frontend
+> flutter test test/integration/live_backend_test.dart --dart-define=ANZHI_LIVE_BACKEND=true
+> ```
+>
+> 该测试在检测到 Key 已配置时会自动从「验证 503」切换为「验证真实回答可被解析」。
 
 > **关于「首页是空的」：** 这不是故障。知识内容遵循
 > `AI 生成初稿 → 人工审核 → 发布`（PROJECT_SPEC 第十五节），
@@ -126,7 +140,7 @@ V2.0   ChatService
 AnZhi/
 ├── frontend/          Flutter 项目
 │   ├── lib/
-│   │   ├── services/  网络请求（api_client / knowledge_api）
+│   │   ├── services/  网络请求（api_client / knowledge_api / chat_api）
 │   │   ├── pages/     五大页面
 │   │   ├── widgets/   通用组件
 │   │   ├── models/    数据模型
@@ -143,7 +157,8 @@ AnZhi/
 │   │   ├── models/    数据库模型
 │   │   ├── schemas/   请求/响应结构
 │   │   ├── services/  业务逻辑
-│   │   │   └── ai/    chat / risk / rag / safety_guard
+│   │   │   └── ai/    deepseek_client / chat_service / prompts / errors
+│   │   │              （safety_guard、risk、rag 属阶段 9 / 14）
 │   │   ├── database/  数据库连接、种子数据、内容审核工具
 │   │   └── config/    环境配置
 │   ├── tests/
@@ -274,7 +289,7 @@ uvicorn app.main:app --reload
 
 ```bash
 cd backend
-.venv\Scripts\python.exe -m pytest      # 96 passed
+.venv\Scripts\python.exe -m pytest      # 179 passed
 ```
 
 ### API 配置
@@ -287,6 +302,15 @@ cp .env.example .env
 
 > `.env` 不存在时后端**仍可正常启动**，健康检查会如实报告
 > `ai_service: "not_configured"`，不会崩溃也不会伪造状态。
+>
+> 未配置 Key 时 `POST /api/chat` 返回 **503** 与一句可直接展示的中文说明
+> （`AI 服务未配置，请联系管理员在后端 .env 中设置 DEEPSEEK_API_KEY`），
+> 而不是 500 或一句含糊的「服务异常」——「部署没配好」不是程序崩溃，
+> 用户看到 500 只会以为 App 坏了。
+>
+> **API Key 只存在于后端的 `.env` 中**（PROJECT_SPEC 第三十五节）：
+> 不写进 Flutter 代码、不提交 GitHub、不写入 README、不硬编码。
+> `.env` 已在 `.gitignore` 中。
 
 ### 知识内容审核流程
 
@@ -334,8 +358,8 @@ app/models/           ← 表结构
 
 | 层次 | 命令 | 说明 |
 |---|---|---|
-| 假后端 | `flutter test` | 50 个测试，无需后端，验证页面在成功 / 失败 / 空数据下的表现 |
-| 真实后端 | 见下 | 8 个测试，验证后端真实返回的字段能被客户端正确解析 |
+| 假后端 | `flutter test` | 76 个测试，无需后端，验证页面在成功 / 失败 / 空数据下的表现 |
+| 真实后端 | 见下 | 10 个测试，验证后端真实返回的字段能被客户端正确解析 |
 
 ```bash
 # 终端 1：启动后端

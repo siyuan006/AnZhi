@@ -42,9 +42,14 @@ class ApiConfig {
     'ANZHI_API_BASE_URL',
   );
 
-  /// 请求超时时间。超时过长会让用户以为 App 卡死，
+  /// 普通接口的请求超时。超时过长会让用户以为 App 卡死，
   /// 过短则会在网络较慢时误报失败。
   static const Duration timeout = Duration(seconds: 10);
+
+  /// AI 问答的超时。大模型生成一段回答通常要十几秒，
+  /// 沿用 10 秒会让绝大多数正常提问都被判为超时。
+  /// 仍必须有上限 —— 没有超时的话，上游卡住会让请求一直挂着。
+  static const Duration aiTimeout = Duration(seconds: 60);
 
   /// 后端根地址（不含结尾斜杠）
   static String get baseUrl {
@@ -91,8 +96,8 @@ class ApiException implements Exception {
 
 /// 极简 JSON 客户端。
 ///
-/// 只实现 GET —— 当前阶段（阶段 7）后端对外只有 GET 接口；
-/// 等阶段 8 的 `POST /api/chat` 落地时再扩展，避免现在写一堆用不到的代码。
+/// 目前只有 GET 与 POST —— 对应后端已实现的两类接口。
+/// 需要时再扩展，不预先写一堆用不到的代码。
 class ApiClient {
   ApiClient({http.Client? httpClient, String? baseUrl, Duration? timeout})
       : _http = httpClient ?? http.Client(),
@@ -112,14 +117,47 @@ class ApiClient {
   Future<Object?> getJson(
     String path, {
     Map<String, dynamic>? query,
-  }) async {
+    Duration? timeout,
+  }) {
     final Uri uri = Uri.parse('$_baseUrl$path').replace(
       queryParameters: _cleanQuery(query),
     );
+    return _send(() => _http.get(uri), timeout);
+  }
 
+  /// 发起 POST 请求并返回解析后的 JSON。
+  ///
+  /// 请求体显式按 UTF-8 编码：中文问题如果按 latin1 发出，
+  /// 服务端收到的会是乱码，表现为「问什么都答非所问」。
+  Future<Object?> postJson(
+    String path,
+    Map<String, dynamic> body, {
+    Duration? timeout,
+  }) {
+    final Uri uri = Uri.parse('$_baseUrl$path');
+    return _send(
+      () => _http.post(
+        uri,
+        headers: const <String, String>{
+          'Content-Type': 'application/json; charset=utf-8',
+        },
+        body: utf8.encode(jsonEncode(body)),
+      ),
+      timeout,
+    );
+  }
+
+  /// 统一的「发请求 → 翻译失败 → 解析响应」流程。
+  ///
+  /// GET 与 POST 共用同一套超时与错误翻译逻辑，
+  /// 否则两条路径的失败提示很容易慢慢长歪。
+  Future<Object?> _send(
+    Future<http.Response> Function() request,
+    Duration? timeout,
+  ) async {
     late final http.Response response;
     try {
-      response = await _http.get(uri).timeout(_timeout);
+      response = await request().timeout(timeout ?? _timeout);
     } on TimeoutException {
       throw const ApiException(
         '请求超时，请检查网络后重试',

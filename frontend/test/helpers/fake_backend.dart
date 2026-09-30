@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:anzhi/services/api_client.dart';
+import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
@@ -35,6 +36,26 @@ class FakeBackend {
 
   /// 响应延迟，用于验证超时分支
   Duration? delay;
+
+  // --- AI 问答（POST /api/chat）-------------------------------------------
+
+  /// 依次收到的问答请求体，用来断言「category 没有被当成 null 发出去」
+  final List<Map<String, dynamic>> chatRequests = <Map<String, dynamic>>[];
+
+  /// 设为一个非空状态码时，问答返回失败
+  int? chatErrorStatus;
+  String chatErrorMessage = 'AI 服务未配置，请联系管理员在后端设置 DEEPSEEK_API_KEY';
+
+  /// 问答成功时的响应体，字段与 `docs/API.md` 第 3 节一致
+  Map<String, dynamic> chatAnswer = <String, dynamic>{
+    'question': '宿舍发生火灾怎么办？',
+    'category': '消防安全',
+    'risk_level': 'high',
+    'answer': '先确保自身安全，再判断是否能够撤离。',
+    'steps': <String>['立即报警', '低姿撤离', '不要乘坐电梯'],
+    'sources': <String>[],
+    'warning': '如已有人受伤，请立即拨打 120。',
+  };
 
   /// 两条已发布的示例知识
   static final List<Map<String, dynamic>> defaultItems = <Map<String, dynamic>>[
@@ -72,6 +93,15 @@ class FakeBackend {
         ),
       );
 
+  /// 供页面 / 服务测试注入的问答接口对象
+  ChatApi chatApi({Duration? timeout}) => ChatApi(
+        client: ApiClient(
+          httpClient: httpClient,
+          baseUrl: 'http://test.local',
+          timeout: timeout,
+        ),
+      );
+
   /// 直接构造 ApiClient（用于只测客户端本身的用例）
   ApiClient client({Duration? timeout}) => ApiClient(
         httpClient: httpClient,
@@ -82,11 +112,29 @@ class FakeBackend {
   Future<http.Response> _handle(http.Request request) async {
     requests.add(request.url);
 
+    // 必须在延迟之前记录请求体：否则「请求已发出但还没返回」这段时间里，
+    // 记录是空的，用例会把在途请求误判成「压根没发出去」。
+    final bool isChat = request.url.path == '/api/chat';
+    if (isChat) {
+      chatRequests.add(
+        jsonDecode(utf8.decode(request.bodyBytes)) as Map<String, dynamic>,
+      );
+    }
+
     if (delay != null) await Future<void>.delayed(delay!);
 
     if (offline) {
       // IOClient 在连接失败时抛出的正是 ClientException
       throw http.ClientException('Connection refused', request.url);
+    }
+
+    // AI 问答走独立分支：它的失败语义与其他接口不同，
+    // 且有自己的一套响应体，混在一起会让用例难以读懂
+    if (isChat) {
+      if (chatErrorStatus != null) {
+        return _json(<String, dynamic>{'detail': chatErrorMessage}, chatErrorStatus!);
+      }
+      return _json(chatAnswer, 200);
     }
 
     if (rawBody != null) {

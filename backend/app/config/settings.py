@@ -86,6 +86,9 @@ class Settings:
             "DEEPSEEK_BASE_URL", "https://api.deepseek.com"
         ).rstrip("/")
         self.deepseek_model: str = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+        # 大模型生成一段回答通常需要十几秒，超时给得太短会大量误报失败。
+        # 但仍必须有上限：没有超时的话，上游卡住会让请求一直挂着。
+        self.deepseek_timeout: float = float(_get_int("DEEPSEEK_TIMEOUT", 60))
 
     @property
     def is_ai_configured(self) -> bool:
