@@ -42,20 +42,30 @@ class KnowledgeTile extends StatelessWidget {
               // 分类 + 风险等级
               Row(
                 children: <Widget>[
-                  if (category != null) ...<Widget>[
-                    Icon(category.icon, size: 14, color: category.color),
-                    const SizedBox(width: 4),
-                    Text(
-                      category.name,
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        color: category.color,
-                      ),
-                    ),
-                    const Spacer(),
-                  ] else
-                    const Spacer(),
+                  Expanded(
+                    child: category == null
+                        ? const SizedBox.shrink()
+                        : Row(
+                            children: <Widget>[
+                              Icon(category.icon,
+                                  size: 14, color: category.color),
+                              const SizedBox(width: 4),
+                              Flexible(
+                                child: Text(
+                                  category.name,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: category.color,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                  const SizedBox(width: 8),
                   RiskBadge(level: item.riskLevel, compact: true),
                 ],
               ),

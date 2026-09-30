@@ -335,23 +335,29 @@ class _Header extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 12),
-          Row(
+          Wrap(
+            spacing: 12,
+            runSpacing: 8,
+            crossAxisAlignment: WrapCrossAlignment.center,
             children: <Widget>[
-              if (category != null) ...<Widget>[
-                Icon(category.icon, size: 15, color: theme.colorScheme.primary),
-                const SizedBox(width: 5),
-                Text(
-                  category.name,
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    fontWeight: FontWeight.w600,
-                    color: theme.colorScheme.primary,
-                  ),
+              if (category != null)
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    Icon(category.icon,
+                        size: 15, color: theme.colorScheme.primary),
+                    const SizedBox(width: 5),
+                    Text(
+                      category.name,
+                      style: TextStyle(
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        color: theme.colorScheme.primary,
+                      ),
+                    ),
+                  ],
                 ),
-                const SizedBox(width: 12),
-              ],
               RiskBadge(level: item.riskLevel, compact: true),
-              const Spacer(),
               _Meta(text: '${item.viewCount} 次浏览'),
             ],
           ),

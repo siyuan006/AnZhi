@@ -19,19 +19,35 @@ class CategoryGrid extends StatelessWidget {
   /// 允许外部传入自定义分类列表，默认为全局六大分类
   final List<SafetyCategory>? categories;
 
+  static const double _verticalPadding = 10;
+  static const double _iconBoxSize = 38;
+  static const double _iconGap = 8;
+  static const double _labelFontSize = 12.5;
+  static const double _labelHeightFactor = 1.25;
+  static const int _labelMaxLines = 2;
+
   @override
   Widget build(BuildContext context) {
     final List<SafetyCategory> items = categories ?? kCategories;
+
+    final double lineHeight = (MediaQuery.textScalerOf(context)
+                .scale(_labelFontSize) *
+            _labelHeightFactor)
+        .ceilToDouble();
+    final double labelHeight = lineHeight * _labelMaxLines;
 
     return GridView.builder(
       shrinkWrap: true,
       physics: const NeverScrollableScrollPhysics(),
       itemCount: items.length,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
         mainAxisSpacing: 10,
         crossAxisSpacing: 10,
-        childAspectRatio: 1.05,
+        mainAxisExtent: _verticalPadding * 2 +
+            _iconBoxSize +
+            _iconGap +
+            labelHeight,
       ),
       itemBuilder: (BuildContext context, int index) {
         final SafetyCategory category = items[index];
@@ -59,29 +75,32 @@ class _CategoryCard extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(kCardRadius),
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 10),
+          padding: const EdgeInsets.symmetric(
+            horizontal: 6,
+            vertical: CategoryGrid._verticalPadding,
+          ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: <Widget>[
               Container(
-                width: 38,
-                height: 38,
+                width: CategoryGrid._iconBoxSize,
+                height: CategoryGrid._iconBoxSize,
                 decoration: BoxDecoration(
                   color: category.color.withValues(alpha: 0.12),
                   borderRadius: BorderRadius.circular(11),
                 ),
                 child: Icon(category.icon, size: 21, color: category.color),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: CategoryGrid._iconGap),
               Text(
                 category.name,
                 textAlign: TextAlign.center,
                 style: const TextStyle(
-                  fontSize: 12.5,
+                  fontSize: CategoryGrid._labelFontSize,
                   fontWeight: FontWeight.w600,
-                  height: 1.25,
+                  height: CategoryGrid._labelHeightFactor,
                 ),
-                maxLines: 2,
+                maxLines: CategoryGrid._labelMaxLines,
                 overflow: TextOverflow.ellipsis,
               ),
             ],

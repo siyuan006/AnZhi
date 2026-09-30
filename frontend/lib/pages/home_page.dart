@@ -535,21 +535,31 @@ class _DailyKnowledgeCard extends StatelessWidget {
             children: <Widget>[
               Row(
                 children: <Widget>[
-                  const Icon(
-                    Icons.wb_sunny_outlined,
-                    size: 16,
-                    color: Colors.white70,
-                  ),
-                  const SizedBox(width: 6),
-                  const Text(
-                    '今日安全知识',
-                    style: TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      color: Colors.white70,
+                  const Expanded(
+                    child: Row(
+                      children: <Widget>[
+                        Icon(
+                          Icons.wb_sunny_outlined,
+                          size: 16,
+                          color: Colors.white70,
+                        ),
+                        SizedBox(width: 6),
+                        Flexible(
+                          child: Text(
+                            '今日安全知识',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.white70,
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
-                  const Spacer(),
+                  const SizedBox(width: 8),
                   RiskBadge(level: item.riskLevel, compact: true),
                 ],
               ),
