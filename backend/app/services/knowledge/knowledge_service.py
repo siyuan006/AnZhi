@@ -6,7 +6,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import ColumnElement, Select, func, or_, select
+from sqlalchemy import ColumnElement, Select, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.models.category import Category
@@ -104,3 +104,31 @@ def get_knowledge(db: Session, knowledge_id: int) -> Knowledge | None:
     return db.scalar(
         _base_query([_PUBLISHED_FILTER, Knowledge.id == knowledge_id])
     )
+
+
+def increment_view_count(db: Session, knowledge_id: int) -> int | None:
+    """把浏览量加一，返回新的浏览量；条目不存在或未发布时返回 None。
+
+    刻意**不做成 `get_knowledge` 的副作用**，而是单独一个写接口：
+
+    - GET 应当是幂等、可缓存的。带副作用的 GET 会被浏览器预取、
+      爬虫、重试各加一次，统计出来的数字没有意义。
+    - 「打开详情页」和「读取详情内容」是两件事。客户端明确地告诉服务端
+      「用户真的看了这一条」，比服务端猜测要可靠。
+    - 阶段 11 的浏览历史可以挂在同一个动作上，不需要再改一次接口。
+
+    用 SQL 层的 `view_count = view_count + 1` 而不是「读出来 +1 再写回」：
+    后者在并发下会丢更新（两个请求都读到 7，都写回 8）。
+    """
+    # 先确认对外的可见性，再自增。若直接 UPDATE 一个未发布的 id，
+    # 会影响行数但用户看不到任何东西，等于把未发布内容的存在性泄露出去。
+    if get_knowledge(db, knowledge_id) is None:
+        return None
+
+    db.execute(
+        update(Knowledge)
+        .where(Knowledge.id == knowledge_id)
+        .values(view_count=Knowledge.view_count + 1)
+    )
+    db.commit()
+    return db.scalar(select(Knowledge.view_count).where(Knowledge.id == knowledge_id))

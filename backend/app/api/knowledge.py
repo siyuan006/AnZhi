@@ -12,7 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.database.session import get_db
 from app.schemas.common import Page
-from app.schemas.knowledge import CategoryOut, KnowledgeDetail, KnowledgeListItem
+from app.schemas.knowledge import (
+    CategoryOut,
+    KnowledgeDetail,
+    KnowledgeListItem,
+    ViewCountOut,
+)
 from app.services.knowledge import knowledge_service
 
 router = APIRouter(tags=["知识系统"])
@@ -80,13 +85,13 @@ def get_knowledge(
 ) -> KnowledgeDetail:
     """返回知识详情。
 
+    **本接口不累加浏览量**，也不会写入浏览历史 —— 它是一个纯读接口。
+    计数由客户端在用户真正打开详情页时调用 `POST /api/knowledge/{id}/view`。
+
     尚未实现（按阶段推进，不做假实现）：
 
-    - **写入浏览历史**：docs/API.md 提到详情接口会记录浏览历史，
-      但历史记录必须归属到具体用户，而登录体系属于阶段 11。
+    - **写入浏览历史**：浏览历史必须归属到具体用户，而登录体系属于阶段 11。
       在此之前没有可靠的 user_id 可写，因此不写 —— 阶段 11 补上。
-    - **累加 view_count**：浏览量统计属于阶段 10（知识系统），
-      且会让 GET 变成写操作，同样留到那时一起处理。
     """
     item = knowledge_service.get_knowledge(db, knowledge_id)
     if item is None:
@@ -95,3 +100,34 @@ def get_knowledge(
             detail="知识不存在或未发布",
         )
     return KnowledgeDetail.from_model(item)
+
+
+@router.post(
+    "/api/knowledge/{knowledge_id}/view",
+    response_model=ViewCountOut,
+    summary="记录一次浏览",
+    responses={404: {"description": "知识不存在或未发布"}},
+)
+def record_view(
+    knowledge_id: int,
+    db: Session = Depends(get_db),
+) -> ViewCountOut:
+    """把浏览量加一，返回最新的浏览量。
+
+    单独做成写接口而不是塞进 GET 详情里：
+
+    - GET 应当是幂等、可缓存的。带副作用的 GET 会被浏览器预取、
+      爬虫和失败重试各加一次，统计出来的数字没有意义。
+    - 「用户打开了详情页」是客户端才知道的信息，由客户端明确告知
+      比服务端猜测可靠。
+
+    未发布内容同样返回 404 —— 直接对未发布的 id 自增，
+    等于对外确认了这条内容存在。
+    """
+    count = knowledge_service.increment_view_count(db, knowledge_id)
+    if count is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="知识不存在或未发布",
+        )
+    return ViewCountOut(view_count=count)

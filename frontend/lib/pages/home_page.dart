@@ -12,6 +12,7 @@ import '../widgets/category_grid.dart';
 import '../widgets/knowledge_tile.dart';
 import '../widgets/risk_badge.dart';
 import '../widgets/section_header.dart';
+import 'knowledge_detail_page.dart';
 
 /// 安知 —— 首页
 ///
@@ -191,7 +192,8 @@ class _HomePageState extends State<HomePage> {
     return <Widget>[
       _DailyKnowledgeCard(
         item: _items.first,
-        onTap: () => _goTo(HomePage._tabKnowledge),
+        // 首页卡片直接把条目带过去，详情页不必再从列表里找一遍
+        onTap: () => _openDetail(_items.first),
       ),
       const SizedBox(height: 22),
       SectionHeader(
@@ -203,9 +205,21 @@ class _HomePageState extends State<HomePage> {
       ),
       _RecommendList(
         items: recommended,
-        onTap: () => _goTo(HomePage._tabKnowledge),
+        onTap: (KnowledgeItem item) => _openDetail(item),
       ),
     ];
+  }
+
+  void _openDetail(KnowledgeItem item) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => KnowledgeDetailPage(
+          knowledgeId: item.id,
+          preview: item,
+          api: widget.api,
+        ),
+      ),
+    );
   }
 }
 
@@ -370,14 +384,20 @@ class _RecommendList extends StatelessWidget {
   const _RecommendList({required this.items, this.onTap});
 
   final List<KnowledgeItem> items;
-  final VoidCallback? onTap;
+
+  /// 回调带上被点的那一条 —— 之前是无参的，只能「跳到知识页」，
+  /// 现在要打开对应条目的详情，必须知道点的是谁。
+  final void Function(KnowledgeItem item)? onTap;
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: <Widget>[
         for (int i = 0; i < items.length; i++) ...<Widget>[
-          KnowledgeTile(item: items[i], onTap: onTap),
+          KnowledgeTile(
+            item: items[i],
+            onTap: onTap == null ? null : () => onTap!(items[i]),
+          ),
           if (i != items.length - 1) const SizedBox(height: kCardGap),
         ],
       ],

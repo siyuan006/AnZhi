@@ -60,5 +60,27 @@ class KnowledgeApi {
     return KnowledgeItem.fromJson(json);
   }
 
+  /// 记录一次浏览，返回最新的浏览量。
+  ///
+  /// 与 [fetchKnowledgeDetail] 分开是刻意的：读详情是幂等的，
+  /// 计数是一次写操作。若把计数塞进详情接口，浏览器预取、
+  /// 失败重试、爬虫都会各算一次浏览。
+  ///
+  /// **失败不抛异常。** 浏览量是锦上添花的数据，
+  /// 让「计数失败」把一次正常的阅读变成错误页是本末倒置 ——
+  /// 调用方拿到 null 表示这次没记上，忽略即可。
+  Future<int?> recordView(int id) async {
+    try {
+      final Object? json = await _client.postJson(
+        '/api/knowledge/$id/view',
+        const <String, dynamic>{},
+      );
+      if (json is! Map<String, dynamic>) return null;
+      return (json['view_count'] as num?)?.toInt();
+    } on ApiException {
+      return null;
+    }
+  }
+
   void dispose() => _client.close();
 }

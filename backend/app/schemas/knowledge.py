@@ -83,3 +83,13 @@ class KnowledgeDetail(KnowledgeListItem):
             author=item.author,
             view_count=item.view_count,
         )
+
+
+class ViewCountOut(BaseModel):
+    """`POST /api/knowledge/{id}/view` 的响应。
+
+    只回传新的浏览量，不回传整条知识 —— 客户端已经有内容了，
+    再传一遍正文纯属浪费流量。
+    """
+
+    view_count: int

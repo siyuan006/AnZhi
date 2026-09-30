@@ -10,11 +10,13 @@ import '../services/api_client.dart';
 import '../services/knowledge_api.dart';
 import '../widgets/async_status.dart';
 import '../widgets/knowledge_tile.dart';
+import 'knowledge_detail_page.dart';
 
 /// 安知 —— 知识页
 ///
 /// 结构（PROJECT_SPEC 第三十八节）：分类列表 → 知识列表 → 知识详情。
-/// 本页承担前两级：顶部分类筛选 + 知识列表；详情页将在阶段 10 实现。
+/// 本页承担前两级：顶部分类筛选 + 知识列表；详情页见
+/// `knowledge_detail_page.dart`。
 ///
 /// 数据来源为后端 `GET /api/knowledge`（阶段 7 接通）。
 /// 筛选与分页**全部由服务端完成**，客户端只负责渲染返回值 ——
@@ -260,14 +262,20 @@ class _KnowledgePageState extends State<KnowledgePage> {
     );
   }
 
-  /// 知识详情页尚未实现（阶段 10）。
-  /// 这里明确提示，而不是跳到一个空白页或假装已实现。
+  /// 打开知识详情页。
+  ///
+  /// 把列表项本身一起传过去：详情页可以先画出标题、分类、风险等级，
+  /// 正文到了再填 —— 用户点进来立刻看到自己点的那一条，
+  /// 而不是一个整页的转圈。
   void _openDetail(BuildContext context, KnowledgeItem item) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('「${item.title}」详情页将在阶段 10 实现'),
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => KnowledgeDetailPage(
+          knowledgeId: item.id,
+          preview: item,
+          // 复用当前这一份接口实例，避免每次进详情都新建一个 http 连接池
+          api: widget.api,
+        ),
       ),
     );
   }

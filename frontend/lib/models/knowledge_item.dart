@@ -45,6 +45,26 @@ class KnowledgeItem {
   /// 分类显示名，找不到分类时降级为「未分类」
   String get categoryName => category?.name ?? '未分类';
 
+  /// 复制一份并覆盖部分字段。
+  ///
+  /// 目前只有一个用途：详情页拿到正文后，再异步取回最新浏览量，
+  /// 需要在不重新请求整条内容的前提下更新计数。
+  KnowledgeItem copyWith({int? viewCount}) {
+    return KnowledgeItem(
+      id: id,
+      title: title,
+      categoryId: categoryId,
+      summary: summary,
+      content: content,
+      riskLevel: riskLevel,
+      imageUrl: imageUrl,
+      source: source,
+      author: author,
+      viewCount: viewCount ?? this.viewCount,
+      createdAt: createdAt,
+    );
+  }
+
   /// 从后端 JSON 构造。
   ///
   /// 对缺失字段做了容错，避免后端字段调整导致客户端崩溃。

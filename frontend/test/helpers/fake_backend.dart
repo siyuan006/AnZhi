@@ -24,6 +24,10 @@ class FakeBackend {
   /// 依次收到的请求地址，供断言使用
   final List<Uri> requests = <Uri>[];
 
+  /// 各条目的浏览量。POST /view 自增，GET 详情时回填 ——
+  /// 让「计数确实被写进去并被读到」这件事可以在测试里被观察到。
+  final Map<int, int> viewCounts = <int, int>{};
+
   /// 设为 true 时模拟「连不上服务器」
   bool offline = false;
 
@@ -150,6 +154,20 @@ class FakeBackend {
       return _json(_filtered(request.url.queryParameters), 200);
     }
 
+    // POST /api/knowledge/{id}/view —— 与真实的写接口分开处理，
+    // 因为它会改变后续 GET 详情的返回值
+    if (path.startsWith('/api/knowledge/') && path.endsWith('/view')) {
+      final String rawId =
+          path.substring('/api/knowledge/'.length, path.length - '/view'.length);
+      final int? id = int.tryParse(rawId);
+      if (id == null || !_exists(id)) {
+        return _json(<String, dynamic>{'detail': '知识不存在或未发布'}, 404);
+      }
+      final int count = (viewCounts[id] ?? 0) + 1;
+      viewCounts[id] = count;
+      return _json(<String, dynamic>{'view_count': count}, 200);
+    }
+
     if (path.startsWith('/api/knowledge/')) {
       final String rawId = path.substring('/api/knowledge/'.length);
       final int? id = int.tryParse(rawId);
@@ -157,10 +175,12 @@ class FakeBackend {
         if (item['id'] == id) {
           return _json(<String, dynamic>{
             ...item,
-            'content': '正文内容，长度足够用于测试。',
-            'source': null,
-            'author': null,
-            'view_count': 0,
+            // 条目自带 content 时以它为准（用例可以借此构造「正文为空」），
+            // 否则补一段够长的正文
+            'content': item['content'] ?? '正文内容，长度足够用于测试。',
+            'source': item['source'],
+            'author': item['author'],
+            'view_count': viewCounts[id] ?? 0,
           }, 200);
         }
       }
@@ -169,6 +189,8 @@ class FakeBackend {
 
     return _json(<String, dynamic>{'detail': '接口不存在'}, 404);
   }
+
+  bool _exists(int id) => items.any((Map<String, dynamic> item) => item['id'] == id);
 
   /// 模拟服务端筛选，返回统一分页结构
   Map<String, dynamic> _filtered(Map<String, String> query) {

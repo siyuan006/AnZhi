@@ -188,6 +188,28 @@ void main() {
         expect(answer.warning, isNotEmpty, reason: '高风险问题必须带安全警告');
       });
 
+      test('浏览计数：写接口加一，且详情接口如实反映', () async {
+        final PagedResult<KnowledgeItem> all = await api.fetchKnowledge();
+        if (all.items.isEmpty) {
+          // 内容尚未审核发布时没有可计数的条目，此时跳过
+          return;
+        }
+
+        final int id = all.items.first.id;
+        final int before = (await api.fetchKnowledgeDetail(id)).viewCount;
+
+        final int? after = await api.recordView(id);
+        expect(after, before + 1);
+
+        // 读详情不会自己加一 —— 否则预取和重试都会被算成浏览
+        expect((await api.fetchKnowledgeDetail(id)).viewCount, before + 1);
+      });
+
+      test('浏览计数：不存在的条目返回 null 而不是抛错', () async {
+        // recordView 刻意吞掉异常：计数失败不该把一次正常阅读变成错误页
+        expect(await api.recordView(999999), isNull);
+      });
+
       test('AI 问答：空问题返回 422，且客户端能读出可读原因', () async {
         // 这条测试守的是一个真实踩过的坑：后端 422 的响应体结构
         // （errors[0].message）一旦变化，客户端只会退化成

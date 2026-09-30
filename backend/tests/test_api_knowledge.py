@@ -256,3 +256,84 @@ class TestKnowledgeDetail:
 
     def test_non_integer_id_returns_422(self, api_client: TestClient) -> None:
         assert api_client.get("/api/knowledge/abc").status_code == 422
+
+    def test_get_detail_does_not_count_as_a_view(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """读详情不加浏览量 —— 否则浏览器预取、重试、爬虫都会算进去。"""
+        _seed(session_factory)
+        target = next(
+            item
+            for item in api_client.get("/api/knowledge").json()["items"]
+            if item["title"] == "宿舍消防安全"
+        )
+
+        for _ in range(3):
+            api_client.get(f"/api/knowledge/{target['id']}")
+
+        assert api_client.get(f"/api/knowledge/{target['id']}").json()["view_count"] == 0
+
+
+class TestRecordView:
+    """POST /api/knowledge/{id}/view"""
+
+    def test_increments_and_returns_new_count(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        _seed(session_factory)
+        target = next(
+            item
+            for item in api_client.get("/api/knowledge").json()["items"]
+            if item["title"] == "宿舍消防安全"
+        )
+
+        for expected in (1, 2, 3):
+            response = api_client.post(f"/api/knowledge/{target['id']}/view")
+            assert response.status_code == 200
+            assert response.json() == {"view_count": expected}
+
+    def test_count_is_visible_in_the_detail_response(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        _seed(session_factory)
+        target = next(
+            item
+            for item in api_client.get("/api/knowledge").json()["items"]
+            if item["title"] == "宿舍消防安全"
+        )
+
+        api_client.post(f"/api/knowledge/{target['id']}/view")
+        api_client.post(f"/api/knowledge/{target['id']}/view")
+
+        assert api_client.get(f"/api/knowledge/{target['id']}").json()["view_count"] == 2
+
+    def test_counting_one_item_does_not_touch_another(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        _seed(session_factory)
+        items = api_client.get("/api/knowledge").json()["items"]
+        first, second = items[0]["id"], items[1]["id"]
+
+        api_client.post(f"/api/knowledge/{first}/view")
+
+        assert api_client.get(f"/api/knowledge/{first}").json()["view_count"] == 1
+        assert api_client.get(f"/api/knowledge/{second}").json()["view_count"] == 0
+
+    def test_unpublished_returns_404_and_is_not_counted(
+        self, api_client: TestClient, session_factory: sessionmaker[Session]
+    ) -> None:
+        """未发布内容不但看不到，也不该被计数。
+
+        否则「自增成功」就等于对外确认了这条草稿存在。
+        """
+        with session_factory() as db:
+            prepare_categories(db)
+            draft = create_knowledge(db, title="草稿", is_published=False)
+            draft_id = draft.id
+
+        response = api_client.post(f"/api/knowledge/{draft_id}/view")
+        assert response.status_code == 404
+        assert response.json()["detail"] == "知识不存在或未发布"
+
+    def test_missing_id_returns_404(self, api_client: TestClient) -> None:
+        assert api_client.post("/api/knowledge/9999/view").status_code == 404
