@@ -7,6 +7,9 @@ import 'favorites_page.dart';
 import 'history_page.dart';
 import 'login_page.dart';
 import 'my_posts_page.dart';
+import 'settings_follow_page.dart';
+import 'settings_home_page.dart';
+import 'settings_notify_page.dart';
 
 /// 安知 —— 我的页面
 ///
@@ -14,8 +17,9 @@ import 'my_posts_page.dart';
 ///   个人信息 · 学习天数 · 收藏 · 历史记录 · 我的帖子
 ///   关注领域 · 首页布局 · 通知设置 · 关于安知
 ///
-/// ⚠️ 个性化相关的入口（关注领域 / 首页布局 / 通知设置）将在阶段 13
-/// 实现，点击会给出明确的阶段提示。
+/// 除「关于安知」外**每一栏都需要登录**，因此统一走 [_openAfterLogin]：
+/// 未登录时先推登录页，登录成功就顺势把目标页打开 ——
+/// 用户点的是「我的收藏」，意图是明确的，不该让他回来再点一次。
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
@@ -59,17 +63,17 @@ class ProfilePage extends StatelessWidget {
               _MenuItem(
                 icon: Icons.interests_outlined,
                 label: '关注领域',
-                stage: '阶段 13',
+                onTap: () => _openFollow(context),
               ),
               _MenuItem(
                 icon: Icons.dashboard_customize_outlined,
                 label: '首页布局',
-                stage: '阶段 13',
+                onTap: () => _openHomeLayout(context),
               ),
               _MenuItem(
                 icon: Icons.notifications_none_rounded,
                 label: '通知设置',
-                stage: '阶段 13',
+                onTap: () => _openNotify(context),
               ),
             ],
           ),
@@ -131,6 +135,15 @@ class ProfilePage extends StatelessWidget {
 
   Future<void> _openMyPosts(BuildContext context) =>
       _openAfterLogin(context, () => const MyPostsPage());
+
+  Future<void> _openFollow(BuildContext context) =>
+      _openAfterLogin(context, () => const SettingsFollowPage());
+
+  Future<void> _openHomeLayout(BuildContext context) =>
+      _openAfterLogin(context, () => const SettingsHomePage());
+
+  Future<void> _openNotify(BuildContext context) =>
+      _openAfterLogin(context, () => const SettingsNotifyPage());
 
   void _showAbout(BuildContext context) {
     showDialog<void>(
@@ -325,16 +338,12 @@ class _MenuItem {
   const _MenuItem({
     required this.icon,
     required this.label,
-    this.stage,
-    this.onTap,
+    required this.onTap,
   });
 
   final IconData icon;
   final String label;
-
-  /// 功能所属阶段。为 `null` 表示功能已实现
-  final String? stage;
-  final VoidCallback? onTap;
+  final VoidCallback onTap;
 }
 
 class _MenuGroup extends StatelessWidget {
@@ -367,37 +376,12 @@ class _MenuGroup extends StatelessWidget {
                 items[i].label,
                 style: const TextStyle(fontSize: 14.5),
               ),
-              trailing: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: <Widget>[
-                  if (items[i].stage != null)
-                    Text(
-                      items[i].stage!,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: theme.colorScheme.outline,
-                      ),
-                    ),
-                  const SizedBox(width: 3),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    size: 19,
-                    color: theme.colorScheme.outline,
-                  ),
-                ],
+              trailing: Icon(
+                Icons.chevron_right_rounded,
+                size: 19,
+                color: theme.colorScheme.outline,
               ),
-              onTap: items[i].onTap ??
-                  () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text(
-                          '「${items[i].label}」将在${items[i].stage}实现',
-                        ),
-                        behavior: SnackBarBehavior.floating,
-                        duration: const Duration(seconds: 2),
-                      ),
-                    );
-                  },
+              onTap: items[i].onTap,
             ),
             if (i != items.length - 1)
               const Divider(height: 1, indent: 54, endIndent: 14),

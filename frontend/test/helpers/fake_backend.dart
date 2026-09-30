@@ -10,6 +10,7 @@ import 'package:anzhi/services/favorite_api.dart';
 import 'package:anzhi/services/history_api.dart';
 import 'package:anzhi/services/post_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
+import 'package:anzhi/services/settings_api.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 
@@ -212,6 +213,18 @@ class FakeBackend {
           httpClient: httpClient,
           baseUrl: 'http://test.local',
           timeout: timeout,
+          token: token,
+        ),
+      );
+
+  /// 个性化设置接口（需要调用方自己给出 token 回调）。
+  ///
+  /// 页面测试一般不需要它 —— 那些用的是 `authController().settingsApi`。
+  /// 这个留给只测 `SettingsApi` 本身的用例。
+  SettingsApi settingsApi({String? Function()? token}) => SettingsApi(
+        client: ApiClient(
+          httpClient: httpClient,
+          baseUrl: 'http://test.local',
           token: token,
         ),
       );
@@ -838,6 +851,10 @@ class FakeBackend {
       return _handlePosts(request, path);
     }
 
+    if (path == '/api/settings') {
+      return _handleSettings(request);
+    }
+
     if (path == '/api/knowledge') {
       return _json(_filtered(request.url.queryParameters), 200);
     }
@@ -1126,6 +1143,126 @@ class FakeBackend {
           },
       ],
     };
+  }
+
+  // --- 个性化设置（/api/settings）------------------------------------------
+
+  /// 用户名 -> 设置。**只有写过设置的用户才有键** ——
+  /// 与真实后端一致：没写过的用户在 `user_settings` 里没有行，
+  /// 读出来的是代码里的默认值。这一点必须在假后端里也成立，
+  /// 否则「第一次打开设置页」这条路径永远测不到。
+  final Map<String, Map<String, dynamic>> settings =
+      <String, Map<String, dynamic>>{};
+
+  /// 没写过设置的用户看到的默认值
+  Map<String, dynamic> get defaultSettings => <String, dynamic>{
+        'followed_categories': <int>[],
+        'home_modules': HomeModule.all
+            .map((HomeModule module) => module.id)
+            .toList(growable: false),
+        'notify_enabled': true,
+      };
+
+  /// 预置一份设置（测试里直接构造「已经设置过」的状态）
+  void seedSettings(
+    String username, {
+    List<int> followedCategories = const <int>[],
+    List<String>? homeModules,
+    bool notifyEnabled = true,
+  }) {
+    settings[username] = <String, dynamic>{
+      'followed_categories': List<int>.from(followedCategories),
+      // 显式传 `[]` 与不传**不是一回事**：前者是「全藏起来」，
+      // 后者是「还没设置过」。用 `??` 而非 `??=` 就是为了保住这个区别。
+      'home_modules': homeModules == null
+          ? defaultSettings['home_modules']
+          : List<String>.from(homeModules),
+      'notify_enabled': notifyEnabled,
+    };
+  }
+
+  /// 强制设置接口走错误分支（读和写都会中招）
+  int? settingsErrorStatus;
+  String settingsError = '设置保存失败，请稍后再试';
+
+  /// 依次收到的 PUT 请求体。
+  ///
+  /// 这是本节最值得盯的地方：分区更新的语义要求「没改的字段
+  /// **根本不出现在请求体里**」，而这件事在页面渲染上看不出来 ——
+  /// 顺手把三个字段都塞进去，界面照样是对的，只是每保存一次
+  /// 都会把另外两项覆盖一遍。
+  final List<Map<String, dynamic>> settingsUpdateRequests =
+      <Map<String, dynamic>>[];
+
+  /// 复述了后端的四个约定：
+  ///   - 未登录一律 401「请先登录」
+  ///   - 没写过的用户返回默认值，**不是 404**
+  ///   - PUT 只改请求体里出现的字段（显式传 `null` 与不传等价）
+  ///   - 分类不存在 404、模块键不认识 422，且**整条请求都不生效**
+  Future<http.Response> _handleSettings(http.Request request) async {
+    if (settingsErrorStatus != null) {
+      return _json(<String, dynamic>{'detail': settingsError}, settingsErrorStatus!);
+    }
+
+    final String? username = _usernameFromHeader(request);
+    if (username == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    if (request.method == 'PUT') {
+      final Map<String, dynamic> body = _body(request);
+      settingsUpdateRequests.add(body);
+
+      final Map<String, dynamic> next = <String, dynamic>{
+        ...settings[username] ?? defaultSettings,
+      };
+
+      final Object? categories = body['followed_categories'];
+      if (categories is List) {
+        final List<int> ids = categories
+            .whereType<num>()
+            .map((num value) => value.toInt())
+            .toList();
+        final Set<int> known =
+            kCategories.map((SafetyCategory c) => c.id).toSet();
+        final List<int> missing = <int>[
+          for (final int id in ids)
+            if (!known.contains(id)) id,
+        ];
+        if (missing.isNotEmpty) {
+          return _json(<String, dynamic>{
+            'detail': '分类不存在：${missing.join('、')}',
+          }, 404);
+        }
+        next['followed_categories'] = ids.toSet().toList()..sort();
+      }
+
+      final Object? modules = body['home_modules'];
+      if (modules is List) {
+        final List<String> keys = modules.whereType<String>().toList();
+        final List<String> unknown = <String>[
+          for (final String key in keys)
+            if (HomeModule.all.every((HomeModule m) => m.id != key)) key,
+        ];
+        if (unknown.isNotEmpty) {
+          return _json(<String, dynamic>{
+            'detail': '首页模块不存在：${unknown.join('、')}',
+          }, 422);
+        }
+        // 按首页顺序排列 —— 与后端 normalize_modules 一致
+        next['home_modules'] = <String>[
+          for (final HomeModule module in HomeModule.all)
+            if (keys.contains(module.id)) module.id,
+        ];
+      }
+
+      final Object? notify = body['notify_enabled'];
+      if (notify is bool) next['notify_enabled'] = notify;
+
+      settings[username] = next;
+    }
+
+    return _json(settings[username] ?? defaultSettings, 200);
   }
 
   Map<String, dynamic> _sessionJson(String username) => <String, dynamic>{

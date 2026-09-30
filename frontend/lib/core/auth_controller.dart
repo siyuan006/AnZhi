@@ -7,6 +7,7 @@ import '../services/auth_api.dart';
 import '../services/auth_store.dart';
 import '../services/favorite_api.dart';
 import '../services/history_api.dart';
+import '../services/settings_api.dart';
 
 /// 安知 —— 登录状态
 ///
@@ -56,6 +57,12 @@ class AuthController extends ChangeNotifier {
   /// 注意这里只有**读和删** —— 记录浏览是详情页调 `/view` 时后端顺带
   /// 完成的，见 `history_api.dart` 的说明。
   late final HistoryApi historyApi = HistoryApi(client: _client);
+
+  /// 个性化设置接口，已经接好鉴权头。同样是「这份数据属于谁」的接口。
+  ///
+  /// ⚠️ **没有「未登录也能读」这条路**：后端两个接口都要登录。
+  /// 因此设置页必须自己处理未登录 —— 见 `pages/settings_follow_page.dart`。
+  late final SettingsApi settingsApi = SettingsApi(client: _client);
 
   /// 已接好鉴权头的底层客户端，供其它需要登录态的接口复用。
   ///

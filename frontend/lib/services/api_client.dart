@@ -96,7 +96,7 @@ class ApiException implements Exception {
 
 /// 极简 JSON 客户端。
 ///
-/// 目前只有 GET / POST / DELETE —— 对应后端已实现的三类接口。
+/// 目前只有 GET / POST / PUT / DELETE —— 对应后端已实现的四类接口。
 /// 需要时再扩展，不预先写一堆用不到的代码。
 class ApiClient {
   ApiClient({
@@ -168,6 +168,24 @@ class ApiClient {
         body: utf8.encode(jsonEncode(body)),
       ),
       timeout,
+    );
+  }
+
+  /// 发起 PUT 请求并返回解析后的 JSON。
+  ///
+  /// 目前只有个性化设置用它（`PUT /api/settings`）。该接口的语义是
+  /// **分区更新**：请求体里没出现的字段保持原样，因此调用方必须
+  /// 只放真的要改的键进去，不能图省事把整个对象铺开 ——
+  /// 那会把没打算动的字段一并覆盖掉。
+  Future<Object?> putJson(String path, Map<String, dynamic> body) {
+    final Uri uri = Uri.parse('$_baseUrl$path');
+    return _send(
+      () => _http.put(
+        uri,
+        headers: _headers(json: true),
+        body: utf8.encode(jsonEncode(body)),
+      ),
+      null,
     );
   }
 

@@ -240,25 +240,46 @@ void main() {
     });
   });
 
-  group('尚未实现的入口', () {
-    testWidgets('个性化入口如实标注阶段', (WidgetTester tester) async {
+  group('个性化入口', () {
+    testWidgets('三个入口都已接通，不再标注阶段', (WidgetTester tester) async {
       await pumpProfile(tester, FakeBackend());
 
       expect(
-        find.text('阶段 12'),
+        find.textContaining('阶段'),
         findsNothing,
-        reason: '阶段 12 的入口（我的帖子）已经接通，不该再标着阶段',
+        reason: '我的页上已经没有「点了没用」的入口了，不该再有阶段标注',
       );
-      expect(find.text('阶段 13'), findsNWidgets(3));
     });
 
-    testWidgets('点未实现的入口提示计划阶段', (WidgetTester tester) async {
+    testWidgets('未登录时点关注领域，先登录再落到该页', (WidgetTester tester) async {
       await pumpProfile(tester, FakeBackend());
 
       await tester.tap(find.text('关注领域'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('阶段 13'), findsWidgets);
+      expect(
+        find.text('登录'),
+        findsWidgets,
+        reason: '未登录时先推登录页 —— 不该直接跳进一个只会报 401 的页面',
+      );
+    });
+
+    testWidgets('未登录时点首页布局，先登录再落到该页', (WidgetTester tester) async {
+      await pumpProfile(tester, FakeBackend());
+
+      await tester.tap(find.text('首页布局'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('登录'), findsWidgets);
+    });
+
+    testWidgets('未登录时点通知设置，先登录再落到该页', (WidgetTester tester) async {
+      await pumpProfile(tester, FakeBackend());
+
+      await tester.tap(find.text('通知设置'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('登录'), findsWidgets);
     });
 
     testWidgets('关于安知有实际内容', (WidgetTester tester) async {

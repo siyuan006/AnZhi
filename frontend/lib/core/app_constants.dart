@@ -144,6 +144,12 @@ SafetyCategory? categoryById(int id) {
 // ---------------------------------------------------------------------------
 
 /// 首页可显示 / 隐藏的模块标识，与用户设置中的 `home_modules` 对应。
+///
+/// ⚠️ [id] 是**接口契约**，必须与后端
+/// `backend/app/services/personalization/settings_service.py` 的
+/// `HOME_MODULES` 一致。和 `kCategories` 与 `categories.id` 的关系一样：
+/// 两边对不上时不会有任何报错，只会「设置无效」——
+/// 用户在首页布局里关掉一个模块，保存成功，首页却毫无变化。
 class HomeModule {
   const HomeModule(this.id, this.label);
 
@@ -151,18 +157,32 @@ class HomeModule {
   final String label;
 
   static const HomeModule daily = HomeModule('daily', '今日安全知识');
-  static const HomeModule ai = HomeModule('ai', 'AI 助手');
   static const HomeModule recommend = HomeModule('recommend', '推荐知识');
   static const HomeModule category = HomeModule('category', '安全分类');
+  static const HomeModule ai = HomeModule('ai', 'AI 助手');
   static const HomeModule community = HomeModule('community', '社区精选');
 
+  /// 顺序即首页从上到下的排布（PROJECT_SPEC 第七节），
+  /// 也与后端存 `home_modules` 时用的规范顺序一致 ——
+  /// 「首页布局」页面直接按这个顺序列，用户看到的就是首页的样子。
   static const List<HomeModule> all = <HomeModule>[
     daily,
-    ai,
     recommend,
     category,
+    ai,
     community,
   ];
+}
+
+/// 按 [id] 查找首页模块，找不到返回 `null`。
+///
+/// 返回 `null` 而不是某个默认模块：后端将来加了新模块而客户端还没跟上时，
+/// 猜一个只会让设置页显示错误的开关状态。
+HomeModule? homeModuleById(String id) {
+  for (final module in HomeModule.all) {
+    if (module.id == id) return module;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
