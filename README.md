@@ -18,7 +18,7 @@
 | 4 | Flutter 五大页面 + 底部导航 | ✅ 已完成 |
 | 5 | FastAPI 后端 | ✅ 已完成 |
 | 6 | SQLite 数据库 | ✅ 已完成 |
-| 7 | 前后端通信 | ⬜ 待开始 |
+| 7 | 前后端通信 | ✅ 已完成 |
 | 8 | 接入 DeepSeek | ⬜ 待开始 |
 | 9 | AI 安全控制（SafetyGuard） | ⬜ 待开始 |
 | 10 | 知识系统 | ⬜ 待开始 |
@@ -31,19 +31,27 @@
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）完成。**
+**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通。**
 
-- 前端：可编译、可运行，已产出 debug APK；数据仍来自临时占位文件 `lib/core/sample_data.dart`
-- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health` 已实测返回正确响应
+- 前端：可编译、可运行，已产出 debug APK；知识页与首页的知识模块**已改为调用真实接口**，按需显示加载 / 失败 / 空状态
+- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge` 已实测返回正确响应
 - 数据库：`backend/anzhi.db` 已建全部 9 张表，六大分类种子数据已写入
+- 联调：前端 50 个测试 + 后端 96 个测试全部通过；另有 8 个「真实后端」集成测试跑通
 
 尚未打通的部分（按阶段推进，不做假实现）：
 
 | 未完成项 | 现状 | 计划阶段 |
 |---|---|---|
-| 内容发布状态 | 12 条初稿已入库但**均为「待审核」**：`/api/knowledge` 因此如实返回空 | 待人工审核 |
-| 前后端通信 | Flutter 仍读本地占位数据 | 7 |
+| 内容发布状态 | 12 条初稿已入库但**均为「待审核」**：`/api/knowledge` 因此如实返回空，App 首页与知识页显示「暂无内容」 | 待人工审核 |
+| 社区帖子 | 仍为占位数据 `lib/core/sample_data.dart`（知识部分的占位数据已删除） | 12 |
+| 知识详情页 | 接口已就绪，页面点击后仍提示「阶段 10 实现」 | 10 |
+| `GET /api/home` 首页聚合接口 | 首页改为直接调用 `/api/knowledge` 取前 5 条 | 13 |
 | DeepSeek AI 问答 | `/api/health` 返回 `ai_service: "not_configured"` | 8 |
+
+> **关于「首页是空的」：** 这不是故障。知识内容遵循
+> `AI 生成初稿 → 人工审核 → 发布`（PROJECT_SPEC 第十五节），
+> 未发布的内容在接口层一律视为不存在。审核并发布后，
+> App 无需任何改动即可显示内容（见下方「知识内容审核流程」）。
 
 ---
 
@@ -117,6 +125,17 @@ V2.0   ChatService
 ```text
 AnZhi/
 ├── frontend/          Flutter 项目
+│   ├── lib/
+│   │   ├── services/  网络请求（api_client / knowledge_api）
+│   │   ├── pages/     五大页面
+│   │   ├── widgets/   通用组件
+│   │   ├── models/    数据模型
+│   │   └── core/      主题、常量、占位数据
+│   └── test/
+│       ├── helpers/     假后端（MockClient）
+│       ├── services/    接口层测试
+│       ├── pages/       页面测试
+│       └── integration/ 真实后端连通性测试（默认跳过）
 ├── backend/           FastAPI 后端
 │   ├── app/
 │   │   ├── main.py
@@ -125,7 +144,7 @@ AnZhi/
 │   │   ├── schemas/   请求/响应结构
 │   │   ├── services/  业务逻辑
 │   │   │   └── ai/    chat / risk / rag / safety_guard
-│   │   ├── database/  数据库连接
+│   │   ├── database/  数据库连接、种子数据、内容审核工具
 │   │   └── config/    环境配置
 │   ├── tests/
 │   ├── requirements.txt
@@ -209,12 +228,25 @@ Flutter  ──→  FastAPI  ──→  .env  ──→  DeepSeek API
 cd frontend
 flutter pub get
 flutter analyze        # 静态检查
-flutter test           # 运行测试
+flutter test           # 运行测试（50 passed）
 flutter run            # 连接真机/模拟器运行
 flutter build apk --debug    # 构建 APK
 ```
 
 产物路径：`frontend/build/app/outputs/flutter-apk/app-debug.apk`
+
+**后端地址：** App 默认连接 `http://10.0.2.2:8000`（Android 模拟器访问宿主机的固定地址），
+开箱即用。真机调试时后端在电脑上，需显式指定电脑的局域网 IP：
+
+```bash
+flutter run --dart-define=ANZHI_API_BASE_URL=http://192.168.1.5:8000
+```
+
+> 配置集中在 `lib/services/api_client.dart` 的 `ApiConfig`，
+> **不要把地址硬编码到页面里**。
+> Android 9 起默认禁止明文 HTTP，明文放行规则在
+> `android/app/src/main/res/xml/network_security_config.xml`：
+> 正式包只放行本机回环地址，debug 包才整体放行（见 `src/debug/`）。
 
 ### 后端（已验证可用）
 
@@ -279,6 +311,48 @@ cd backend
 
 > 未发布的内容在接口层一律视为不存在（详情接口返回 404 而非 403），
 > 因此不会出现「能看到标题但打不开」的情况。
+
+### 前后端联调
+
+```text
+Flutter 页面
+    │  只负责渲染与交互
+    ▼
+lib/services/         ← 网络层：超时、错误翻译、地址配置
+    │  HTTP / JSON
+    ▼
+FastAPI app/api/      ← 只解析参数、调用 service、包装响应
+    │
+app/services/         ← 业务规则（谁能看见什么、按什么排序）
+    │
+app/models/           ← 表结构
+```
+
+分层是单向的：页面不碰 HTTP，路由不写业务规则。
+
+联调相关的测试分两层：
+
+| 层次 | 命令 | 说明 |
+|---|---|---|
+| 假后端 | `flutter test` | 50 个测试，无需后端，验证页面在成功 / 失败 / 空数据下的表现 |
+| 真实后端 | 见下 | 8 个测试，验证后端真实返回的字段能被客户端正确解析 |
+
+```bash
+# 终端 1：启动后端
+cd backend
+.venv\Scripts\python.exe -m uvicorn app.main:app --port 8000
+
+# 终端 2：对着真实后端跑集成测试
+cd frontend
+flutter test test/integration/live_backend_test.dart --dart-define=ANZHI_LIVE_BACKEND=true
+```
+
+> 集成测试**默认跳过**，不会混进 `flutter test` 的结果里假装通过。
+> 它存在的意义是拦截「字段名漂移」这类问题 ——
+> 假后端是照着客户端的预期写的，永远发现不了前后端字段对不上的情况。
+>
+> 注意：`flutter test` 环境会拦截真实网络请求，
+> 因此页面级测试只能配假后端，真实连通性验证在网络层完成。
 
 ---
 
