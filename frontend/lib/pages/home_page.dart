@@ -2,35 +2,55 @@ import 'package:flutter/material.dart';
 
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
+import '../core/auth_controller.dart';
+import '../core/open_after_login.dart';
 import '../models/knowledge_item.dart';
 import '../models/paged_result.dart';
 import '../models/post_item.dart';
+import '../models/user_settings.dart';
 import '../services/api_client.dart';
 import '../services/knowledge_api.dart';
 import '../services/post_api.dart';
+import '../services/settings_api.dart';
 import '../widgets/async_status.dart';
 import '../widgets/category_grid.dart';
 import '../widgets/knowledge_tile.dart';
 import '../widgets/risk_badge.dart';
 import '../widgets/section_header.dart';
 import 'knowledge_detail_page.dart';
+import 'settings_home_page.dart';
+import 'settings_notify_page.dart';
 
 /// 安知 —— 首页
 ///
 /// 模块顺序严格遵循 PROJECT_SPEC.md 第七节：
 ///   顶部 → 今日安全知识 → 推荐知识卡片 → 安全分类 → AI 助手入口 → 社区精选
 ///
-/// 数据来源（阶段 7 起）：
+/// 数据来源：
 ///   - 今日安全知识 / 推荐知识：`GET /api/knowledge`（取最新 5 条）
 ///   - 安全分类：本地常量 `kCategories`，与数据库种子数据一致
 ///     （图标与配色无法由 JSON 表达，故保留在客户端）
 ///   - 社区精选：`GET /api/posts`（阶段 12a 起接真实数据）
+///   - 模块显隐与关注方向：`GET /api/settings`（阶段 13d）
+///
+/// **个性化只在登录后生效，而且只调顺序和显隐**：
+///   - 关掉的模块不渲染（`GET /api/settings` 的 `home_modules`）
+///   - 关注的领域排在知识列表前面（`prefer_categories`，阶段 13c）
+///   - 设置拉不到时**按默认布局显示**，不把首页变成错误页 ——
+///     首页的主体是安全知识，设置只是调整它的摆法
 ///
 /// ⚠️ 尚未实现：`GET /api/home` 聚合接口（docs/API.md 第 9 节）。
-/// 该接口能减少客户端请求数，但属于优化项而非阶段 7 的必需项，
-/// 因此暂由本页直接调用知识列表接口，待阶段 13（个性化）一并实现。
+/// 该接口能减少客户端请求数，但属于优化项而非必需项，
+/// 目前由本页分别调用知识 / 帖子 / 设置三个接口。
 class HomePage extends StatefulWidget {
-  const HomePage({super.key, this.onNavigateToTab, this.api, this.postApi});
+  const HomePage({
+    super.key,
+    this.onNavigateToTab,
+    this.api,
+    this.postApi,
+    this.settingsApi,
+    this.isActive = true,
+  });
 
   /// 请求切换到其他底部标签（如点击 AI 入口跳到 AI 页）
   final void Function(int index)? onNavigateToTab;
@@ -41,6 +61,16 @@ class HomePage extends StatefulWidget {
   /// 社区精选用。与 [api] 分开注入：两者是不同模块，
   /// 其中一个挂了不该让另一个的测试也跟着难写。
   final PostApi? postApi;
+
+  /// 个性化设置用。同样分开注入。
+  final SettingsApi? settingsApi;
+
+  /// 当前是否停留在首页这个标签。
+  ///
+  /// 底部导航用的是 `IndexedStack`，切换标签**不会重建页面** ——
+  /// 没有这个信号的话，用户去「首页布局」关掉一个模块再回来，
+  /// 看到的还是旧布局，只能靠下拉刷新，而界面上完全看不出这一点。
+  final bool isActive;
 
   /// 底部导航索引：AI = 1，知识 = 2，社区 = 3
   static const int _tabAi = 1;
@@ -57,6 +87,15 @@ class _HomePageState extends State<HomePage> {
 
   late final PostApi _postApi = widget.postApi ?? PostApi();
   late final bool _ownsPostApi = widget.postApi == null;
+
+  late final SettingsApi? _settingsApi =
+      widget.settingsApi ?? AuthScope.maybeOf(context)?.settingsApi;
+
+  /// **未登录或没拉到时是 null**，此时按默认布局显示、不做偏好排序。
+  UserSettings? _settings;
+
+  bool _started = false;
+  bool _loggedIn = false;
 
   /// 首页只需要「今日 1 条 + 推荐 4 条」，多取一条留出余量
   static const int _fetchSize = 5;
@@ -75,9 +114,34 @@ class _HomePageState extends State<HomePage> {
   static const int _previewPostCount = 3;
 
   @override
-  void initState() {
-    super.initState();
-    _load();
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+
+    // 在 didChangeDependencies 里读而非 initState：
+    // `AuthScope.maybeOf` 要读 InheritedWidget，initState 里读会被框架断言拦下。
+    final bool loggedIn = AuthScope.maybeOf(context)?.isLoggedIn ?? false;
+
+    if (!_started) {
+      _started = true;
+      _loggedIn = loggedIn;
+      _load();
+      return;
+    }
+
+    // 登录 / 退出之后设置换了账号，首页的布局和顺序都得跟着换
+    if (loggedIn != _loggedIn) {
+      _loggedIn = loggedIn;
+      _load(showLoading: false);
+    }
+  }
+
+  @override
+  void didUpdateWidget(HomePage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+
+    // 从别的标签切回首页。刷新时**不显示加载态** ——
+    // 内容本来就在，切个标签闪一下转圈比看到旧数据还难受。
+    if (!oldWidget.isActive && widget.isActive) _load(showLoading: false);
   }
 
   @override
@@ -89,17 +153,43 @@ class _HomePageState extends State<HomePage> {
 
   void _goTo(int index) => widget.onNavigateToTab?.call(index);
 
-  Future<void> _load() async {
-    if (mounted) {
+  /// 取个性化设置。
+  ///
+  /// **任何失败都只是让 `_settings` 保持 null**，不向上抛：
+  /// 首页该做的是照常把知识显示出来，而不是因为一次设置请求失败
+  /// 就变成错误页。未登录时干脆不发 —— 没有账号就没有设置，
+  /// 发出去只会拿到 401，而现象看起来像是后端坏了。
+  Future<void> _loadSettings() async {
+    final SettingsApi? api = _settingsApi;
+    if (api == null || !_loggedIn) {
+      _settings = null;
+      return;
+    }
+
+    try {
+      _settings = await api.fetch();
+    } on ApiException {
+      _settings = null;
+    }
+  }
+
+  Future<void> _load({bool showLoading = true}) async {
+    if (showLoading && mounted) {
       setState(() {
         _loading = true;
         _error = null;
       });
     }
 
+    // 先取设置：关注的领域要作为 `prefer_categories` 一起发给知识接口，
+    // 拿到之前没法定排序。这一步未登录时是空操作，不产生请求。
+    await _loadSettings();
+
     try {
-      final PagedResult<KnowledgeItem> result =
-          await _api.fetchKnowledge(pageSize: _fetchSize);
+      final PagedResult<KnowledgeItem> result = await _api.fetchKnowledge(
+        pageSize: _fetchSize,
+        preferCategoryIds: _settings?.followedCategories,
+      );
       if (!mounted) return;
       setState(() {
         _loading = false;
@@ -115,7 +205,7 @@ class _HomePageState extends State<HomePage> {
       });
     }
 
-    await _loadPosts();
+    await _loadPosts(showLoading: showLoading);
   }
 
   /// 拉社区精选。
@@ -123,8 +213,8 @@ class _HomePageState extends State<HomePage> {
   /// **失败不写进 `_error`。** 知识才是首页的主体，社区精选是末尾的
   /// 一小块 —— 让它把整页变成错误页是本末倒置。这里单独记一个标志，
   /// 只影响那一块，并如实说明拉不到而不是显示空。
-  Future<void> _loadPosts() async {
-    if (mounted) setState(() => _postsLoading = true);
+  Future<void> _loadPosts({bool showLoading = true}) async {
+    if (showLoading && mounted) setState(() => _postsLoading = true);
 
     try {
       final PagedResult<PostItem> result = await _postApi.fetchPosts(
@@ -146,8 +236,29 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  /// 某个模块是否显示。
+  ///
+  /// 未登录或设置没拉到时一律显示：默认形态应该是「全都能看到」，
+  /// 而不是因为一次网络抖动把首页清空。
+  bool _showsModule(HomeModule module) =>
+      _settings?.showsModule(module.id) ?? true;
+
+  Future<void> _openHomeLayout() async {
+    await openAfterLogin(context, () => const SettingsHomePage());
+    if (!mounted) return;
+    await _load(showLoading: false);
+  }
+
+  Future<void> _openNotify() async {
+    await openAfterLogin(context, () => const SettingsNotifyPage());
+    if (!mounted) return;
+    await _load(showLoading: false);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final List<Widget> blocks = _buildBlocks();
+
     return Scaffold(
       backgroundColor: kBackgroundColor,
       body: SafeArea(
@@ -162,44 +273,15 @@ class _HomePageState extends State<HomePage> {
               24,
             ),
             children: <Widget>[
-              const _HomeHeader(),
+              _HomeHeader(onOpenNotify: _openNotify),
               const SizedBox(height: 18),
 
-              // ① 今日安全知识 + ② 推荐知识
-              ..._buildKnowledgeSections(),
-              const SizedBox(height: 22),
-
-              // ③ 安全分类
-              SectionHeader(
-                title: '安全分类',
-                subtitle: '六大领域，系统学习',
-                icon: Icons.grid_view_rounded,
-                actionLabel: '全部',
-                onAction: () => _goTo(HomePage._tabKnowledge),
-              ),
-              CategoryGrid(
-                onCategoryTap: (_) => _goTo(HomePage._tabKnowledge),
-              ),
-              const SizedBox(height: 22),
-
-              // ④ AI 助手入口
-              _AiEntryCard(onTap: () => _goTo(HomePage._tabAi)),
-              const SizedBox(height: 22),
-
-              // ⑤ 社区精选
-              SectionHeader(
-                title: '社区精选',
-                subtitle: '看看大家在讨论什么',
-                icon: Icons.forum_outlined,
-                actionLabel: '进入社区',
-                onAction: () => _goTo(HomePage._tabCommunity),
-              ),
-              _CommunityPreview(
-                posts: _posts,
-                loading: _postsLoading,
-                failed: _postsFailed,
-                onTap: () => _goTo(HomePage._tabCommunity),
-              ),
+              // 模块之间的间距在这里统一给：某个模块被关掉之后，
+              // 不会在它原来的位置留下一个空当
+              for (int i = 0; i < blocks.length; i++) ...<Widget>[
+                if (i > 0) const SizedBox(height: 22),
+                blocks[i],
+              ],
             ],
           ),
         ),
@@ -207,11 +289,73 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// 首页各个模块，按 PROJECT_SPEC 第七节的顺序，跳过被关掉的那些。
+  List<Widget> _buildBlocks() {
+    final List<HomeModule> visible = <HomeModule>[
+      for (final HomeModule module in HomeModule.all)
+        if (_showsModule(module)) module,
+    ];
+
+    if (visible.isEmpty) {
+      return <Widget>[_AllModulesHidden(onOpenLayout: _openHomeLayout)];
+    }
+
+    return <Widget>[
+      // ① 今日安全知识 + ② 推荐知识
+      ..._buildKnowledgeSections(),
+      // ③ 安全分类
+      if (visible.contains(HomeModule.category))
+        Column(
+          children: <Widget>[
+            SectionHeader(
+              title: '安全分类',
+              subtitle: '六大领域，系统学习',
+              icon: Icons.grid_view_rounded,
+              actionLabel: '全部',
+              onAction: () => _goTo(HomePage._tabKnowledge),
+            ),
+            CategoryGrid(
+              onCategoryTap: (_) => _goTo(HomePage._tabKnowledge),
+            ),
+          ],
+        ),
+      // ④ AI 助手入口
+      if (visible.contains(HomeModule.ai))
+        _AiEntryCard(onTap: () => _goTo(HomePage._tabAi)),
+      // ⑤ 社区精选
+      if (visible.contains(HomeModule.community))
+        Column(
+          children: <Widget>[
+            SectionHeader(
+              title: '社区精选',
+              subtitle: '看看大家在讨论什么',
+              icon: Icons.forum_outlined,
+              actionLabel: '进入社区',
+              onAction: () => _goTo(HomePage._tabCommunity),
+            ),
+            _CommunityPreview(
+              posts: _posts,
+              loading: _postsLoading,
+              failed: _postsFailed,
+              onTap: () => _goTo(HomePage._tabCommunity),
+            ),
+          ],
+        ),
+    ];
+  }
+
   /// ① 今日安全知识 + ② 推荐知识
   ///
   /// 三种状态分开渲染：加载中、加载失败（可重试）、后端暂无已发布内容。
   /// 失败时只影响这两块，分类 / AI 入口 / 社区仍可正常使用。
+  ///
+  /// 两块都关掉时返回空列表：知识拉没拉到都不影响首页剩下的部分，
+  /// 没必要为一个用户已经藏起来的模块显示错误或空白。
   List<Widget> _buildKnowledgeSections() {
+    final bool daily = _showsModule(HomeModule.daily);
+    final bool recommend = _showsModule(HomeModule.recommend);
+    if (!daily && !recommend) return const <Widget>[];
+
     if (_loading) {
       return const <Widget>[LoadingPlaceholder(message: '正在加载今日安全知识…')];
     }
@@ -236,27 +380,31 @@ class _HomePageState extends State<HomePage> {
       ];
     }
 
+    // 今日那条被今日卡片拿走后，剩下的才是推荐。
+    // 今日整块关掉时不必白扔一条：这个位置本来就只有 5 条。
     final List<KnowledgeItem> recommended =
-        _items.length > 1 ? _items.sublist(1) : _items;
+        daily && _items.length > 1 ? _items.sublist(1) : _items;
 
     return <Widget>[
-      _DailyKnowledgeCard(
-        item: _items.first,
-        // 首页卡片直接把条目带过去，详情页不必再从列表里找一遍
-        onTap: () => _openDetail(_items.first),
-      ),
-      const SizedBox(height: 22),
-      SectionHeader(
-        title: '推荐知识',
-        subtitle: '根据你的关注方向推荐',
-        icon: Icons.recommend_outlined,
-        actionLabel: '更多',
-        onAction: () => _goTo(HomePage._tabKnowledge),
-      ),
-      _RecommendList(
-        items: recommended,
-        onTap: (KnowledgeItem item) => _openDetail(item),
-      ),
+      if (daily)
+        _DailyKnowledgeCard(
+          item: _items.first,
+          // 首页卡片直接把条目带过去，详情页不必再从列表里找一遍
+          onTap: () => _openDetail(_items.first),
+        ),
+      if (recommend && recommended.isNotEmpty) ...<Widget>[
+        SectionHeader(
+          title: '推荐知识',
+          subtitle: '根据你的关注方向推荐',
+          icon: Icons.recommend_outlined,
+          actionLabel: '更多',
+          onAction: () => _goTo(HomePage._tabKnowledge),
+        ),
+        _RecommendList(
+          items: recommended,
+          onTap: (KnowledgeItem item) => _openDetail(item),
+        ),
+      ],
     ];
   }
 
@@ -273,12 +421,41 @@ class _HomePageState extends State<HomePage> {
   }
 }
 
+/// 五个模块全被关掉时的说明。
+///
+/// 不能只留一片空白：用户会以为首页坏了。要给出一条回去打开模块的路，
+/// 而且必须说清「是你自己关的」，否则他只会觉得这个 App 出了问题。
+class _AllModulesHidden extends StatelessWidget {
+  const _AllModulesHidden({required this.onOpenLayout});
+
+  final VoidCallback onOpenLayout;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: <Widget>[
+        const EmptyPlaceholder(
+          icon: Icons.dashboard_customize_outlined,
+          title: '首页模块都被关掉了',
+          message: '你在「首页布局」里关掉了全部模块，\n所以这里没有内容可以显示。',
+        ),
+        OutlinedButton(
+          onPressed: onOpenLayout,
+          child: const Text('去首页布局打开'),
+        ),
+      ],
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // 顶部
 // ---------------------------------------------------------------------------
 
 class _HomeHeader extends StatelessWidget {
-  const _HomeHeader();
+  const _HomeHeader({required this.onOpenNotify});
+
+  final VoidCallback onOpenNotify;
 
   @override
   Widget build(BuildContext context) {
@@ -322,9 +499,9 @@ class _HomeHeader extends StatelessWidget {
           ),
         ),
         IconButton(
-          onPressed: () {},
+          onPressed: onOpenNotify,
           icon: const Icon(Icons.notifications_none_rounded),
-          tooltip: '通知',
+          tooltip: '通知设置',
         ),
       ],
     );

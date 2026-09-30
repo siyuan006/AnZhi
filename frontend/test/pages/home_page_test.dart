@@ -1,4 +1,9 @@
+import 'package:anzhi/core/auth_controller.dart';
 import 'package:anzhi/pages/home_page.dart';
+import 'package:anzhi/pages/login_page.dart';
+import 'package:anzhi/pages/settings_home_page.dart';
+import 'package:anzhi/pages/settings_notify_page.dart';
+import 'package:anzhi/widgets/knowledge_tile.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -14,6 +19,28 @@ Future<void> useTallWindow(WidgetTester tester) async {
   await tester.binding.setSurfaceSize(const Size(800, 1600));
   addTearDown(() => tester.binding.setSurfaceSize(null));
 }
+
+/// 三条知识，用来观察「今日拿走一条、推荐拿其余」
+final List<Map<String, dynamic>> _threeItems = <Map<String, dynamic>>[
+  for (int i = 0; i < 3; i++)
+    <String, dynamic>{
+      'id': i + 1,
+      'title': '知识条目 ${i + 1}',
+      'category_id': 1,
+      'category_name': '消防安全',
+      'summary': '摘要 ${i + 1}',
+      'risk_level': 'low',
+      'image_url': null,
+      'created_at': '2026-09-30T10:00:00',
+    },
+];
+
+/// 装好三条知识、并预置一份首页布局设置的假后端
+FakeBackend _backendWith(
+  List<Map<String, dynamic>> items, {
+  required List<String> homeModules,
+}) =>
+    FakeBackend(items: items)..seedSettings('alice', homeModules: homeModules);
 
 void main() {
   Widget wrap(FakeBackend backend, {List<int>? tabs}) => MaterialApp(
@@ -176,6 +203,343 @@ void main() {
       expect(find.textContaining('还没有人发帖'), findsNothing);
       // 知识部分不受影响
       expect(find.text('今日安全知识'), findsOneWidget);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 个性化（阶段 13d）
+  // ---------------------------------------------------------------------------
+
+  group('按设置显示模块', () {
+    /// 登录后注入个性化设置，首页据此决定显示什么。
+    ///
+    /// 注入 `settingsApi` 之外还要套 `AuthScope` ——
+    /// 首页要先知道「现在是不是登录状态」才决定发不发这个请求，
+    /// 光给接口不告诉它登录了，它会一直按未登录处理。
+    Future<AuthController> pumpLoggedIn(
+      WidgetTester tester,
+      FakeBackend backend, {
+      bool withSettingsApi = true,
+    }) async {
+      await useTallWindow(tester);
+
+      backend.seedAccount('alice', 'hunter2hunter2');
+      final AuthController auth = backend.authController();
+      await auth.login(username: 'alice', password: 'hunter2hunter2');
+
+      await tester.pumpWidget(
+        AuthScope(
+          controller: auth,
+          child: MaterialApp(
+            home: HomePage(
+              api: backend.api(),
+              postApi: backend.postApi(),
+              settingsApi: withSettingsApi ? auth.settingsApi : null,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      return auth;
+    }
+
+    testWidgets('未登录时不请求设置，五个模块全显示', (WidgetTester tester) async {
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend();
+
+      await tester.pumpWidget(
+        AuthScope(
+          controller: backend.authController(),
+          child: MaterialApp(
+            home: HomePage(api: backend.api(), postApi: backend.postApi()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      // 没登录就没有账号可谈，发出去只会拿到 401 ——
+      // 那看起来像是后端坏了，而实际只是没登录
+      expect(
+        backend.requests.any((Uri url) => url.path == '/api/settings'),
+        isFalse,
+        reason: '未登录不该发这个请求',
+      );
+      expect(find.text('今日安全知识'), findsOneWidget);
+      expect(find.text('安全分类'), findsOneWidget);
+    });
+
+    testWidgets('关掉的模块不渲染，其余照常', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()
+        ..seedSettings(
+          'alice',
+          homeModules: <String>['daily', 'category', 'community'],
+        );
+
+      await pumpLoggedIn(tester, backend);
+
+      expect(find.text('今日安全知识'), findsOneWidget);
+      expect(find.text('安全分类'), findsOneWidget);
+      expect(find.text('社区精选'), findsOneWidget);
+      expect(find.text('推荐知识'), findsNothing);
+      expect(find.text('AI 安全助手'), findsNothing);
+    });
+
+    testWidgets('今日安全知识在时，推荐只拿剩下的', (WidgetTester tester) async {
+      await pumpLoggedIn(
+        tester,
+        _backendWith(_threeItems, homeModules: <String>['daily', 'recommend']),
+      );
+
+      expect(find.byType(KnowledgeTile), findsNWidgets(2), reason: '第 1 条被今日卡片拿走了');
+    });
+
+    testWidgets('今日安全知识关掉后，那一条回到推荐里', (WidgetTester tester) async {
+      // 列表第 1 条本来是给今日卡片的。今日整块关掉之后它应该回到推荐里，
+      // 否则用户关掉一个模块反而**少看到一条内容**。
+      await pumpLoggedIn(
+        tester,
+        _backendWith(_threeItems, homeModules: <String>['recommend']),
+      );
+
+      expect(find.byType(KnowledgeTile), findsNWidgets(3), reason: '三条都该在推荐里');
+    });
+
+    testWidgets('五个模块全关掉时说明原因并给回去打开的路', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()
+        ..seedSettings('alice', homeModules: <String>[]);
+
+      await pumpLoggedIn(tester, backend);
+
+      expect(find.text('首页模块都被关掉了'), findsOneWidget);
+      expect(
+        find.textContaining('在「首页布局」里关掉了全部模块'),
+        findsOneWidget,
+        reason: '必须说清是「你自己关的」，否则用户只会以为这个 App 出了问题',
+      );
+      expect(find.text('去首页布局打开'), findsOneWidget);
+
+      // 关键：不能只留一片空白，也不能把别的东西显示出来
+      expect(find.text('今日安全知识'), findsNothing);
+      expect(find.text('安全分类'), findsNothing);
+      expect(find.text('AI 安全助手'), findsNothing);
+    });
+
+    testWidgets('点「去首页布局打开」进设置页', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()
+        ..seedSettings('alice', homeModules: <String>[]);
+
+      await pumpLoggedIn(tester, backend);
+
+      await tester.tap(find.text('去首页布局打开'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SettingsHomePage), findsOneWidget);
+    });
+
+    testWidgets('设置拉不到时按默认布局显示，而不是整页报错', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..settingsErrorStatus = 500;
+
+      await pumpLoggedIn(tester, backend);
+
+      expect(
+        find.text('今日安全知识'),
+        findsOneWidget,
+        reason: '首页的主体是安全知识，设置只是调整它的摆法',
+      );
+      expect(find.text('安全分类'), findsOneWidget);
+      expect(find.textContaining('设置保存失败'), findsNothing, reason: '首页不该替设置页报错');
+    });
+  });
+
+  group('按关注方向推荐', () {
+    testWidgets('关注的领域作为 prefer_categories 发给知识接口', (WidgetTester tester) async {
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend()
+        ..seedAccount('alice', 'hunter2hunter2')
+        ..seedSettings('alice', followedCategories: <int>[1, 5]);
+      final AuthController auth = backend.authController();
+      await auth.login(username: 'alice', password: 'hunter2hunter2');
+
+      await tester.pumpWidget(
+        AuthScope(
+          controller: auth,
+          child: MaterialApp(
+            home: HomePage(
+              api: backend.api(),
+              postApi: backend.postApi(),
+              settingsApi: auth.settingsApi,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Uri sent = backend.requests
+          .firstWhere((Uri url) => url.path == '/api/knowledge');
+      expect(sent.queryParametersAll['prefer_categories'], <String>['1', '5']);
+    });
+
+    testWidgets('没关注任何领域时不带这个参数', (WidgetTester tester) async {
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend()..seedAccount('alice', 'hunter2hunter2');
+      final AuthController auth = backend.authController();
+      await auth.login(username: 'alice', password: 'hunter2hunter2');
+
+      await tester.pumpWidget(
+        AuthScope(
+          controller: auth,
+          child: MaterialApp(
+            home: HomePage(
+              api: backend.api(),
+              postApi: backend.postApi(),
+              settingsApi: auth.settingsApi,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final Uri sent = backend.requests
+          .firstWhere((Uri url) => url.path == '/api/knowledge');
+      expect(sent.queryParametersAll.containsKey('prefer_categories'), isFalse);
+    });
+  });
+
+  group('从别的标签切回首页', () {
+    testWidgets('重新取一次设置，改了布局回来就能看到', (WidgetTester tester) async {
+      // 底部导航是 IndexedStack，切标签不会重建页面。
+      // 没有这个刷新的话，用户去「首页布局」关掉「安全分类」再回来，
+      // 看到的还是旧布局，只能靠下拉刷新 —— 而界面上完全看不出这一点。
+      final FakeBackend backend = FakeBackend()
+        ..seedSettings('alice', homeModules: <String>['daily']);
+      await useTallWindow(tester);
+
+      backend.seedAccount('alice', 'hunter2hunter2');
+      final AuthController auth = backend.authController();
+      await auth.login(username: 'alice', password: 'hunter2hunter2');
+
+      Widget page({required bool active}) => AuthScope(
+            controller: auth,
+            child: MaterialApp(
+              home: HomePage(
+                isActive: active,
+                api: backend.api(),
+                postApi: backend.postApi(),
+                settingsApi: auth.settingsApi,
+              ),
+            ),
+          );
+
+      await tester.pumpWidget(page(active: true));
+      await tester.pumpAndSettle();
+      expect(find.text('安全分类'), findsNothing);
+
+      // 切走再切回来，其间用户在设置页把「安全分类」打开了
+      await tester.pumpWidget(page(active: false));
+      await tester.pumpAndSettle();
+      backend.seedSettings('alice', homeModules: <String>['daily', 'category']);
+
+      await tester.pumpWidget(page(active: true));
+      await tester.pumpAndSettle();
+
+      expect(find.text('安全分类'), findsOneWidget);
+    });
+
+    testWidgets('切回来时不显示加载态', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend();
+      await useTallWindow(tester);
+
+      backend.seedAccount('alice', 'hunter2hunter2');
+      final AuthController auth = backend.authController();
+      await auth.login(username: 'alice', password: 'hunter2hunter2');
+
+      Widget page({required bool active}) => AuthScope(
+            controller: auth,
+            child: MaterialApp(
+              home: HomePage(
+                isActive: active,
+                api: backend.api(),
+                postApi: backend.postApi(),
+                settingsApi: auth.settingsApi,
+              ),
+            ),
+          );
+
+      await tester.pumpWidget(page(active: true));
+      await tester.pumpAndSettle();
+      expect(find.text('今日安全知识'), findsOneWidget);
+
+      // 让刷新慢下来，才有机会看清「刷新途中」长什么样。
+      // 不拖慢的话请求在一帧内就回来了，断言等于没测。
+      backend.delay = const Duration(milliseconds: 200);
+
+      await tester.pumpWidget(page(active: false));
+      await tester.pump();
+      await tester.pumpWidget(page(active: true));
+      await tester.pump(const Duration(milliseconds: 50));
+
+      // 内容本来就在，切个标签闪一下转圈比看到旧数据还难受
+      expect(find.text('今日安全知识'), findsOneWidget);
+      expect(
+        find.byType(CircularProgressIndicator),
+        findsNothing,
+        reason: '刷新途中不该退回加载态',
+      );
+
+      // 放行在途的请求。`delay` 在发起时就已被取走，改回 null 不影响
+      // 这一次 —— 必须把时钟推过 200ms，否则测试结束时会留下未完成的定时器
+      backend.delay = null;
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pumpAndSettle();
+    });
+  });
+
+  group('通知入口', () {
+    testWidgets('点页头通知图标进入通知设置', (WidgetTester tester) async {
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend()..seedAccount('alice', 'hunter2hunter2');
+      final AuthController auth = backend.authController();
+      await auth.login(username: 'alice', password: 'hunter2hunter2');
+
+      await tester.pumpWidget(
+        AuthScope(
+          controller: auth,
+          child: MaterialApp(
+            home: HomePage(
+              api: backend.api(),
+              postApi: backend.postApi(),
+              settingsApi: auth.settingsApi,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('通知设置'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(SettingsNotifyPage), findsOneWidget);
+    });
+
+    testWidgets('未登录时先推登录页，而不是跳进一个只会报 401 的页面', (WidgetTester tester) async {
+      await useTallWindow(tester);
+      final FakeBackend backend = FakeBackend();
+
+      await tester.pumpWidget(
+        AuthScope(
+          controller: backend.authController(),
+          child: MaterialApp(
+            home: HomePage(api: backend.api(), postApi: backend.postApi()),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('通知设置'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginPage), findsOneWidget);
+      expect(find.byType(SettingsNotifyPage), findsNothing);
     });
   });
 }

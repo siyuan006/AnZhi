@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
 import '../core/auth_controller.dart';
+import '../core/open_after_login.dart';
 import 'favorites_page.dart';
 import 'history_page.dart';
 import 'login_page.dart';
@@ -104,28 +105,13 @@ class ProfilePage extends StatelessWidget {
 
   /// 打开「我的收藏」「浏览历史」这类**需要登录**的页面。
   ///
-  /// 未登录时**先推登录页，登录成功就顺势把目标页打开** ——
-  /// 用户点的是「我的收藏」，意图是明确的，不该让他回来再点一次。
+  /// 具体怎么做见 [openAfterLogin] —— 首页的通知入口也走同一份，
+  /// 「未登录时先登录再落到目标页」这件事在两个入口上必须表现一致。
   Future<void> _openAfterLogin(
     BuildContext context,
     Widget Function() page,
-  ) async {
-    final AuthController? auth = AuthScope.maybeOf(context);
-    if (auth == null) return;
-
-    if (!auth.isLoggedIn) {
-      await Navigator.of(context).push<void>(
-        MaterialPageRoute<void>(builder: (_) => const LoginPage()),
-      );
-      // 用户可能是直接返回、没登录就走了
-      if (!context.mounted || !auth.isLoggedIn) return;
-    }
-
-    if (!context.mounted) return;
-    await Navigator.of(context).push<void>(
-      MaterialPageRoute<void>(builder: (_) => page()),
-    );
-  }
+  ) =>
+      openAfterLogin(context, page);
 
   Future<void> _openFavorites(BuildContext context) =>
       _openAfterLogin(context, () => const FavoritesPage());

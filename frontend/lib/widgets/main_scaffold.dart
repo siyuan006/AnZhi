@@ -85,6 +85,7 @@ class _MainScaffoldState extends State<MainScaffold> {
         children: <Widget>[
           HomePage(
             onNavigateToTab: _onDestinationSelected,
+            isActive: _currentIndex == 0,
             api: widget.knowledgeApi,
           ),
           AiPage(api: widget.chatApi),
