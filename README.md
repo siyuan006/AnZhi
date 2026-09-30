@@ -12,10 +12,10 @@
 
 | 阶段 | 内容 | 状态 |
 |:---:|---|:---:|
-| 1 | 开发环境配置 | 🚧 进行中 |
+| 1 | 开发环境配置 | ✅ 已完成 |
 | 2 | Git 仓库初始化 | ✅ 已完成 |
-| 3 | Flutter 项目创建 | ⬜ 待开始 |
-| 4 | Flutter 五大页面 + 底部导航 | ⬜ 待开始 |
+| 3 | Flutter 项目创建 | ✅ 已完成 |
+| 4 | Flutter 五大页面 + 底部导航 | ✅ 已完成 |
 | 5 | FastAPI 后端 | ⬜ 待开始 |
 | 6 | SQLite 数据库 | ⬜ 待开始 |
 | 7 | 前后端通信 | ⬜ 待开始 |
@@ -31,7 +31,8 @@
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：环境准备阶段。** 尚未产出应用代码。
+**当前进度：Flutter 前端骨架完成。** App 可编译、可运行，已产出 debug APK。
+AI 问答尚未接入后端（阶段 8），数据来自临时占位文件 `lib/core/sample_data.dart`。
 
 ---
 
@@ -167,18 +168,43 @@ Flutter  ──→  FastAPI  ──→  .env  ──→  DeepSeek API
 
 | 工具 | 版本 | 说明 |
 |---|---|---|
-| Flutter | 3.47.5+ | 含 Dart 3.13.4 |
-| Python | 3.12+ | FastAPI 后端 |
-| Git | 2.54+ | 版本管理 |
-| Android Studio | 最新版 | 提供 Android SDK |
+| Flutter | 3.47.5 | 含 Dart 3.13.4 |
+| Python | 3.12.10 | FastAPI 后端 |
+| Git | 2.54.0 | 版本管理 |
+| JDK | 17+ | Android 构建（实测 22.0.2 可用） |
+| Android SDK | API 36 + build-tools 36.0.0 | 经 cmdline-tools 安装 |
+| Android NDK | 28.2.13676358 | Flutter 模板默认要求 |
+
+> 本项目使用 **Android 命令行工具** 而非 Android Studio 完成 SDK 安装：
+> 体积更小、可脚本化，对构建 APK 完全够用。
+> 需要图形化模拟器或 IDE 时可另行安装 Android Studio。
+
+### 国内网络环境说明
+
+在部分网络环境下，直连 `services.gradle.org` / `plugins.gradle.org` / Maven Central
+会出现 TLS 握手被中断，导致构建失败。本项目已做两处适配：
+
+1. `frontend/android/settings.gradle.kts` 与 `build.gradle.kts` 中优先使用阿里云镜像
+2. 用户级 `~/.gradle/gradle.properties` 可配置本地代理（该文件不在仓库内）
 
 ---
 
 ## 运行方法
 
-> 代码尚未产出，本节将在对应阶段完成后补全并实测。
+### 前端（已验证可用）
 
-### 后端
+```bash
+cd frontend
+flutter pub get
+flutter analyze        # 静态检查
+flutter test           # 运行测试
+flutter run            # 连接真机/模拟器运行
+flutter build apk --debug    # 构建 APK
+```
+
+产物路径：`frontend/build/app/outputs/flutter-apk/app-debug.apk`
+
+### 后端（阶段 5 完成后可用）
 
 ```bash
 cd backend
@@ -186,14 +212,6 @@ python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload
-```
-
-### 前端
-
-```bash
-cd frontend
-flutter pub get
-flutter run
 ```
 
 ### API 配置
