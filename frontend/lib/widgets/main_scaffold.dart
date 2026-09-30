@@ -5,6 +5,7 @@ import '../pages/community_page.dart';
 import '../pages/home_page.dart';
 import '../pages/knowledge_page.dart';
 import '../pages/profile_page.dart';
+import '../services/knowledge_api.dart';
 
 /// 安知 —— 主框架
 ///
@@ -14,7 +15,11 @@ import '../pages/profile_page.dart';
 /// 使用 [IndexedStack] 保留各页面状态，切换标签时不会重建页面、
 /// 也不会丢失滚动位置。
 class MainScaffold extends StatefulWidget {
-  const MainScaffold({super.key});
+  const MainScaffold({super.key, this.knowledgeApi});
+
+  /// 知识接口。为 `null` 时由各页面自行创建（生产路径）；
+  /// 测试注入假实现后，无需后端即可驱动整套页面。
+  final KnowledgeApi? knowledgeApi;
 
   @override
   State<MainScaffold> createState() => _MainScaffoldState();
@@ -64,9 +69,12 @@ class _MainScaffoldState extends State<MainScaffold> {
       body: IndexedStack(
         index: _currentIndex,
         children: <Widget>[
-          HomePage(onNavigateToTab: _onDestinationSelected),
+          HomePage(
+            onNavigateToTab: _onDestinationSelected,
+            api: widget.knowledgeApi,
+          ),
           const AiPage(),
-          const KnowledgePage(),
+          KnowledgePage(api: widget.knowledgeApi),
           const CommunityPage(),
           const ProfilePage(),
         ],

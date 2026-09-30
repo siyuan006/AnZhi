@@ -1,85 +1,20 @@
-import '../models/knowledge_item.dart';
 import 'app_constants.dart';
 
-/// ⚠️ 占位数据 —— 临时文件，后端接通后删除 ⚠️
+/// ⚠️ 占位数据 —— 临时文件，阶段 12 后端社区接口完成后删除 ⚠️
 ///
-/// 本文件仅用于在 FastAPI 后端完成前（阶段 3~6）让 UI 有内容可渲染，
-/// **不是真实接口返回的数据**，也不是真实知识库内容。
+/// 本文件仅用于社区接口完成前让 UI 有内容可渲染，
+/// **不是真实接口返回的数据**。
 ///
-/// 阶段 7「前后端通信」完成后：
-///   1. 由 `lib/services/api_client.dart` 发起真实 HTTP 请求
+/// 阶段 7「前后端通信」已完成：知识卡片与分类已改由
+/// `lib/services/knowledge_api.dart` 调用真实后端接口，
+/// 原 `kSampleKnowledge` 等知识占位数据**已随本次改动删除**。
+///
+/// 目前仅剩社区帖子占位，因为社区接口（`GET /api/posts`）属阶段 12。
+/// 阶段 12 完成后：
+///   1. 帖子改由 `services/post_api.dart` 拉取
 ///   2. 本文件整体删除
-///   3. 页面改为消费 `services/` 返回的数据
 ///
 /// 禁止将本文件的占位内容当作已完成的接口功能对外宣称。
-
-/// 占位知识卡片
-const List<KnowledgeItem> kSampleKnowledge = <KnowledgeItem>[
-  KnowledgeItem(
-    id: 1,
-    title: '宿舍发生火灾如何正确逃生',
-    categoryId: 1,
-    summary: '保持冷静、低姿撤离、不乘电梯、不贪恋财物。掌握正确的逃生方式能在关键时刻救命。',
-    riskLevel: RiskLevel.high,
-    viewCount: 128,
-  ),
-  KnowledgeItem(
-    id: 2,
-    title: '电动车为什么不能在楼道充电',
-    categoryId: 2,
-    summary: '锂电池起火 3 分钟即可产生致命浓烟，楼道充电会直接封死唯一逃生通道。',
-    riskLevel: RiskLevel.high,
-    viewCount: 256,
-  ),
-  KnowledgeItem(
-    id: 3,
-    title: '灭火器的四种常见类型与适用范围',
-    categoryId: 1,
-    summary: '干粉、二氧化碳、水基、泡沫灭火器各有适用场景，用错反而会助长火势。',
-    riskLevel: RiskLevel.low,
-    viewCount: 89,
-  ),
-  KnowledgeItem(
-    id: 4,
-    title: '识别电信诈骗的五个通用信号',
-    categoryId: 5,
-    summary: '要求转账、索要验证码、自称公检法、制造紧迫感、要求屏幕共享——出现任意一条都要警惕。',
-    riskLevel: RiskLevel.medium,
-    viewCount: 312,
-  ),
-  KnowledgeItem(
-    id: 5,
-    title: '地震发生时室内避险要点',
-    categoryId: 6,
-    summary: '伏地、遮挡、手抓牢。优先选择承重墙角或坚固桌下，远离玻璃与外墙。',
-    riskLevel: RiskLevel.high,
-    viewCount: 174,
-  ),
-  KnowledgeItem(
-    id: 6,
-    title: '校园实验室常见安全隐患',
-    categoryId: 4,
-    summary: '化学品存放、用电负荷、通风设施、应急冲洗装置是实验室检查的四个重点。',
-    riskLevel: RiskLevel.medium,
-    viewCount: 67,
-  ),
-  KnowledgeItem(
-    id: 7,
-    title: '夜间骑行电动车的安全装备',
-    categoryId: 3,
-    summary: '头盔、反光条、前后车灯是夜间骑行的最低配置，缺一不可。',
-    riskLevel: RiskLevel.low,
-    viewCount: 143,
-  ),
-  KnowledgeItem(
-    id: 8,
-    title: '插座冒烟时的正确处理方式',
-    categoryId: 2,
-    summary: '立即断开总闸，切勿直接用手拔插头或用泼水方式处理。',
-    riskLevel: RiskLevel.medium,
-    viewCount: 201,
-  ),
-];
 
 /// 占位社区帖子
 class SamplePost {
@@ -134,12 +69,6 @@ const List<SamplePost> kSamplePosts = <SamplePost>[
     commentCount: 15,
   ),
 ];
-
-/// 首页「今日安全知识」—— 占位，实际应由后端按日期选取
-KnowledgeItem get kSampleDailyKnowledge => kSampleKnowledge.first;
-
-/// 首页「推荐知识」—— 占位，V1.0 使用固定推荐（PROJECT_SPEC 第七节）
-List<KnowledgeItem> get kSampleRecommended => kSampleKnowledge.take(4).toList();
 
 /// 首页「社区精选」—— 占位
 List<SamplePost> get kSampleFeaturedPosts => kSamplePosts;

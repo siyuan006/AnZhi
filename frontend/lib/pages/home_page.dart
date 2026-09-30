@@ -4,6 +4,10 @@ import '../core/app_constants.dart';
 import '../core/app_theme.dart';
 import '../core/sample_data.dart';
 import '../models/knowledge_item.dart';
+import '../models/paged_result.dart';
+import '../services/api_client.dart';
+import '../services/knowledge_api.dart';
+import '../widgets/async_status.dart';
 import '../widgets/category_grid.dart';
 import '../widgets/knowledge_tile.dart';
 import '../widgets/risk_badge.dart';
@@ -14,93 +18,194 @@ import '../widgets/section_header.dart';
 /// 模块顺序严格遵循 PROJECT_SPEC.md 第七节：
 ///   顶部 → 今日安全知识 → 推荐知识卡片 → 安全分类 → AI 助手入口 → 社区精选
 ///
-/// V1.0 暂不实现复杂推荐算法，使用「固定推荐 + 简单用户兴趣」（第七节）。
+/// 数据来源（阶段 7 起）：
+///   - 今日安全知识 / 推荐知识：`GET /api/knowledge`（取最新 5 条）
+///   - 安全分类：本地常量 `kCategories`，与数据库种子数据一致
+///     （图标与配色无法由 JSON 表达，故保留在客户端）
+///   - 社区精选：仍为占位数据，社区接口属阶段 12
 ///
-/// ⚠️ 当前数据来源为 `core/sample_data.dart` 占位数据，
-/// 阶段 7「前后端通信」完成后改为调用 `GET /api/home`。
-class HomePage extends StatelessWidget {
-  const HomePage({super.key, this.onNavigateToTab});
+/// ⚠️ 尚未实现：`GET /api/home` 聚合接口（docs/API.md 第 9 节）。
+/// 该接口能减少客户端请求数，但属于优化项而非阶段 7 的必需项，
+/// 因此暂由本页直接调用知识列表接口，待阶段 13（个性化）一并实现。
+class HomePage extends StatefulWidget {
+  const HomePage({super.key, this.onNavigateToTab, this.api});
 
   /// 请求切换到其他底部标签（如点击 AI 入口跳到 AI 页）
   final void Function(int index)? onNavigateToTab;
+
+  /// 允许注入，便于测试用假客户端替换真实网络
+  final KnowledgeApi? api;
 
   /// 底部导航索引：AI = 1，知识 = 2，社区 = 3
   static const int _tabAi = 1;
   static const int _tabKnowledge = 2;
   static const int _tabCommunity = 3;
 
-  void _goTo(int index) => onNavigateToTab?.call(index);
+  @override
+  State<HomePage> createState() => _HomePageState();
+}
+
+class _HomePageState extends State<HomePage> {
+  late final KnowledgeApi _api = widget.api ?? KnowledgeApi();
+  late final bool _ownsApi = widget.api == null;
+
+  /// 首页只需要「今日 1 条 + 推荐 4 条」，多取一条留出余量
+  static const int _fetchSize = 5;
+
+  bool _loading = true;
+  String? _error;
+  List<KnowledgeItem> _items = const <KnowledgeItem>[];
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    if (_ownsApi) _api.dispose();
+    super.dispose();
+  }
+
+  void _goTo(int index) => widget.onNavigateToTab?.call(index);
+
+  Future<void> _load() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _error = null;
+      });
+    }
+
+    try {
+      final PagedResult<KnowledgeItem> result =
+          await _api.fetchKnowledge(pageSize: _fetchSize);
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = null;
+        _items = result.items;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loading = false;
+        _error = error.message;
+        _items = const <KnowledgeItem>[];
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: kBackgroundColor,
       body: SafeArea(
-        child: ListView(
-          padding: const EdgeInsets.fromLTRB(
-            kPagePadding,
-            8,
-            kPagePadding,
-            24,
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: ListView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.fromLTRB(
+              kPagePadding,
+              8,
+              kPagePadding,
+              24,
+            ),
+            children: <Widget>[
+              const _HomeHeader(),
+              const SizedBox(height: 18),
+
+              // ① 今日安全知识 + ② 推荐知识
+              ..._buildKnowledgeSections(),
+              const SizedBox(height: 22),
+
+              // ③ 安全分类
+              SectionHeader(
+                title: '安全分类',
+                subtitle: '六大领域，系统学习',
+                icon: Icons.grid_view_rounded,
+                actionLabel: '全部',
+                onAction: () => _goTo(HomePage._tabKnowledge),
+              ),
+              CategoryGrid(
+                onCategoryTap: (_) => _goTo(HomePage._tabKnowledge),
+              ),
+              const SizedBox(height: 22),
+
+              // ④ AI 助手入口
+              _AiEntryCard(onTap: () => _goTo(HomePage._tabAi)),
+              const SizedBox(height: 22),
+
+              // ⑤ 社区精选
+              SectionHeader(
+                title: '社区精选',
+                subtitle: '看看大家在讨论什么',
+                icon: Icons.forum_outlined,
+                actionLabel: '进入社区',
+                onAction: () => _goTo(HomePage._tabCommunity),
+              ),
+              _CommunityPreview(
+                posts: kSampleFeaturedPosts,
+                onTap: () => _goTo(HomePage._tabCommunity),
+              ),
+            ],
           ),
-          children: <Widget>[
-            const _HomeHeader(),
-            const SizedBox(height: 18),
-
-            // ① 今日安全知识
-            _DailyKnowledgeCard(
-              item: kSampleDailyKnowledge,
-              onTap: () => _goTo(_tabKnowledge),
-            ),
-            const SizedBox(height: 22),
-
-            // ② 推荐知识卡片
-            SectionHeader(
-              title: '推荐知识',
-              subtitle: '根据你的关注方向推荐',
-              icon: Icons.recommend_outlined,
-              actionLabel: '更多',
-              onAction: () => _goTo(_tabKnowledge),
-            ),
-            _RecommendList(
-              items: kSampleRecommended,
-              onTap: () => _goTo(_tabKnowledge),
-            ),
-            const SizedBox(height: 22),
-
-            // ③ 安全分类
-            SectionHeader(
-              title: '安全分类',
-              subtitle: '六大领域，系统学习',
-              icon: Icons.grid_view_rounded,
-              actionLabel: '全部',
-              onAction: () => _goTo(_tabKnowledge),
-            ),
-            CategoryGrid(
-              onCategoryTap: (_) => _goTo(_tabKnowledge),
-            ),
-            const SizedBox(height: 22),
-
-            // ④ AI 助手入口
-            _AiEntryCard(onTap: () => _goTo(_tabAi)),
-            const SizedBox(height: 22),
-
-            // ⑤ 社区精选
-            SectionHeader(
-              title: '社区精选',
-              subtitle: '看看大家在讨论什么',
-              icon: Icons.forum_outlined,
-              actionLabel: '进入社区',
-              onAction: () => _goTo(_tabCommunity),
-            ),
-            _CommunityPreview(
-              posts: kSampleFeaturedPosts,
-              onTap: () => _goTo(_tabCommunity),
-            ),
-          ],
         ),
       ),
     );
+  }
+
+  /// ① 今日安全知识 + ② 推荐知识
+  ///
+  /// 三种状态分开渲染：加载中、加载失败（可重试）、后端暂无已发布内容。
+  /// 失败时只影响这两块，分类 / AI 入口 / 社区仍可正常使用。
+  List<Widget> _buildKnowledgeSections() {
+    if (_loading) {
+      return const <Widget>[LoadingPlaceholder(message: '正在加载今日安全知识…')];
+    }
+
+    if (_error != null) {
+      return <Widget>[
+        ErrorPlaceholder(
+          message: _error!,
+          hint: '首页内容来自后端服务，请确认后端已启动',
+          onRetry: _load,
+        ),
+      ];
+    }
+
+    if (_items.isEmpty) {
+      return const <Widget>[
+        EmptyPlaceholder(
+          icon: Icons.menu_book_outlined,
+          title: '暂无知识内容',
+          message: '知识内容需经人工审核后才对外发布，\n审核完成前首页会保持为空。',
+        ),
+      ];
+    }
+
+    final List<KnowledgeItem> recommended =
+        _items.length > 1 ? _items.sublist(1) : _items;
+
+    return <Widget>[
+      _DailyKnowledgeCard(
+        item: _items.first,
+        onTap: () => _goTo(HomePage._tabKnowledge),
+      ),
+      const SizedBox(height: 22),
+      SectionHeader(
+        title: '推荐知识',
+        subtitle: '根据你的关注方向推荐',
+        icon: Icons.recommend_outlined,
+        actionLabel: '更多',
+        onAction: () => _goTo(HomePage._tabKnowledge),
+      ),
+      _RecommendList(
+        items: recommended,
+        onTap: () => _goTo(HomePage._tabKnowledge),
+      ),
+    ];
   }
 }
 
@@ -372,6 +477,8 @@ class _AiEntryCard extends StatelessWidget {
 // ⑤ 社区精选
 // ---------------------------------------------------------------------------
 
+/// ⚠️ 数据来源仍为 `core/sample_data.dart` 占位帖子。
+/// 社区接口（`GET /api/posts`）属阶段 12，届时一并接真实数据。
 class _CommunityPreview extends StatelessWidget {
   const _CommunityPreview({required this.posts, this.onTap});
 
