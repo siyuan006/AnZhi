@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Generator
 
 import httpx
@@ -107,6 +108,84 @@ class TestRequestValidation:
         body = chat_client.post("/api/chat", json={"message": ""}).json()
         assert "detail" in body
         assert body.get("errors")
+
+    @pytest.mark.parametrize(
+        ("payload", "reason"),
+        [
+            ({"message": ""}, "空问题"),
+            ({"message": "   "}, "全空白"),
+            ({"message": "问" * 1001}, "超长"),
+            ({"message": "问题", "category": "分" * 51}, "分类超长"),
+        ],
+    )
+    def test_validation_message_is_displayable_chinese(
+        self,
+        chat_client: TestClient,
+        payload: dict[str, object],
+        reason: str,
+    ) -> None:
+        """422 的文案必须能直接摆到用户面前。
+
+        客户端把 `errors[0].message` **原样**显示在对话气泡里
+        （docs/API.md 第 3 节写明「直接展示 errors[0].message」），
+        所以一次 Pydantic 内置约束漏出来，用户在手机上看到的就是
+        「String should have at most 1000 characters」这种英文报错。
+        只断言状态码是拦不住这件事的 —— 这四条最初正是这么漏过去的。
+        """
+        body = chat_client.post("/api/chat", json=payload).json()
+        message = body["errors"][0]["message"]
+
+        assert re.search(r"[一-鿿]", message), f"{reason}的报错应当有中文说明"
+        assert "String should" not in message, f"{reason}漏出了 Pydantic 的英文原文"
+
+    def test_message_of_exactly_the_limit_is_accepted(
+        self,
+        chat_client: TestClient,
+    ) -> None:
+        """正好 1000 个字是合法输入，不能因为首尾空白被判超长。
+
+        这条守的是一个真实的坑：长度若写成 `Field(max_length=…)`，
+        约束作用在**原始值**上且在 validator 之前执行，
+        「两个空格 + 1000 个字 + 两个空格」会被判超长，
+        而用户数来数去都只有 1000 个字。
+        """
+        response = chat_client.post(
+            "/api/chat",
+            json={"message": "  " + "问" * 1000 + "  "},
+        )
+        # 未配置 Key，所以走不到模型；这里只关心它**没有**被校验拦下
+        assert response.status_code != 422
+
+    def test_message_over_the_limit_after_trimming_is_still_rejected(
+        self,
+        chat_client: TestClient,
+    ) -> None:
+        """去掉空白之后仍然超长，那就该拦 —— 不能因为加了 strip 就放行。"""
+        response = chat_client.post(
+            "/api/chat",
+            json={"message": "  " + "问" * 1001 + "  "},
+        )
+        assert response.status_code == 422
+
+    def test_message_is_trimmed_before_being_answered(self) -> None:
+        """首尾空白在送到模型之前就该去掉，别拿空白占额度。"""
+        captured: dict = {}
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured["body"] = json.loads(request.content)
+            return httpx.Response(
+                200, json={"choices": [{"message": {"content": '{"answer": "x"}'}}]}
+            )
+
+        with _client_with(_service(handler)) as client:
+            response = client.post(
+                "/api/chat",
+                json={"message": "  宿舍着火怎么办？  "},
+            )
+
+        assert response.status_code == 200
+        prompt = captured["body"]["messages"][1]["content"]
+        assert "用户问题：宿舍着火怎么办？" in prompt
 
 
 class TestUnconfigured:

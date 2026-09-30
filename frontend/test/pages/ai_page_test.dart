@@ -225,6 +225,43 @@ void main() {
       expect(find.textContaining('无法连接到服务器'), findsOneWidget);
     });
 
+    testWidgets('请求失败时把刚打的问题留在输入框里，不用重打一遍', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()..chatErrorStatus = 503;
+      await pumpPage(tester, backend);
+
+      await tester.enterText(find.byType(TextField), '插座冒烟了应该先做什么？');
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await tester.pumpAndSettle();
+
+      // 先确认这次确实失败了，否则下面那条断言会因为「成功」而失去意义
+      expect(find.textContaining('DEEPSEEK_API_KEY'), findsOneWidget);
+
+      // 输入框是在发请求之前就清空的（防止重复发送）。失败之后如果不还回来，
+      // 用户就得凭记忆把刚打的一段话重新打一遍 —— 网络抖一下、超时一次、
+      // 或者被限流，都得重打。描述一次紧急情况的文字往往不短。
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        '插座冒烟了应该先做什么？',
+        reason: '失败后输入框应当恢复成用户刚才打的内容',
+      );
+    });
+
+    testWidgets('发送成功后输入框保持清空，不把已问过的问题留着', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend();
+      await pumpPage(tester, backend);
+
+      await tester.enterText(find.byType(TextField), '插座冒烟了应该先做什么？');
+      await tester.tap(find.byIcon(Icons.arrow_upward_rounded));
+      await tester.pumpAndSettle();
+
+      expect(find.text('先确保自身安全，再判断是否能够撤离。'), findsOneWidget);
+      expect(
+        tester.widget<TextField>(find.byType(TextField)).controller?.text,
+        isEmpty,
+        reason: '成功之后输入框必须是空的，否则用户会以为没发出去',
+      );
+    });
+
     testWidgets('失败后仍可继续提问', (WidgetTester tester) async {
       final FakeBackend backend = FakeBackend()..chatErrorStatus = 503;
       await pumpPage(tester, backend);

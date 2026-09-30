@@ -104,6 +104,17 @@ class _AiPageState extends State<AiPage> {
       setState(() {
         _messages.add(ChatMessage.error(error.message));
         _sending = false;
+        // 输入框是在发请求之前清空的（防止重复发送）。失败之后要还回来：
+        // 网络抖一下、超时一次、被限流，都让用户凭记忆重打一遍刚写的
+        // 那段话，而这些描述往往不短，还可能是在着急的时候写的。
+        // 只在自己还空着的时候回填 —— 等待期间用户可能已经重新打字了，
+        // 那种情况下不能把他的新输入覆盖掉。
+        if (_inputController.text.isEmpty) {
+          _inputController.value = TextEditingValue(
+            text: question,
+            selection: TextSelection.collapsed(offset: question.length),
+          );
+        }
       });
     }
 

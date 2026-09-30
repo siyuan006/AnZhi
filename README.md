@@ -38,7 +38,7 @@
 - 前端：可编译、可运行，已产出 debug APK；首页、知识页、知识详情页、AI 问答页、登录注册页、我的收藏页、浏览历史页、社区页、帖子详情页、发帖页、我的帖子页、我的页、关注领域页、首页布局页、通知设置页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态。AI 回答里的「相关知识」可一路点进知识详情页读原文
 - 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/knowledge/{id}`、`/api/knowledge/{id}/view`、`/api/chat`、`/api/auth/*`、`/api/favorites`、`/api/history`、`/api/posts`、`/api/posts/mine`、`/api/posts/{id}/comments`、`/api/posts/{id}/like`、`/api/settings` 已实测返回正确响应
 - 数据库：`backend/anzhi.db` 已建全部 9 张表，六大分类种子数据已写入
-- 联调：前端 363 个测试 + 后端 540 个测试全部通过；另有 70 个「真实后端」集成测试（默认跳过；开启后 43 通过 / 27 如实跳过，跳过的是依赖「知识库已发布内容」与「已配置 API Key」的那几组，而非空跑）
+- 联调：前端 365 个测试 + 后端 547 个测试全部通过；另有 70 个「真实后端」集成测试（默认跳过；开启后 43 通过 / 27 如实跳过，跳过的是依赖「知识库已发布内容」与「已配置 API Key」的那几组，而非空跑）
 
 尚未打通的部分（按阶段推进，不做假实现）：
 

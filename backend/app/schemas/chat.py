@@ -8,20 +8,21 @@ from pydantic import BaseModel, Field, field_validator
 MAX_HISTORY_ITEMS = 6
 MAX_HISTORY_ITEM_LENGTH = 500
 
+# 用户问题的长度上限
+MAX_MESSAGE_LENGTH = 1000
+MAX_CATEGORY_LENGTH = 50
+
 
 class ChatRequest(BaseModel):
     """`POST /api/chat` 请求体。"""
 
     message: str = Field(
         ...,
-        min_length=1,
-        max_length=1000,
-        description="用户问题",
+        description="用户问题，最长 1000 个字",
         examples=["宿舍发生火灾怎么办？"],
     )
     category: str | None = Field(
         None,
-        max_length=50,
         description="指定分类；不传则由模型自行判断",
     )
     history: list[str] = Field(
@@ -36,15 +37,33 @@ class ChatRequest(BaseModel):
     @field_validator("message")
     @classmethod
     def _message_not_blank(cls, value: str) -> str:
-        """拦截「全是空格」的输入。
+        """校验用户问题：先去掉首尾空白，再判空与长度。
 
-        `min_length=1` 只能挡住空串，但 "   " 同样不是一个问题，
-        放行只会白白消耗一次 API 调用。
+        长度不写成 `Field(max_length=…)`（`post.py` 里写了同样的理由）：
+        那条约束作用在**原始值**上，且在 validator **之前**执行，
+        于是「两个空格 + 正好 1000 个字 + 两个空格」会被判超长，
+        而用户看到的明明没超。报错文案也只会是英文的
+        「String should have at most 1000 characters」——
+        客户端是**原样展示**这句话的（docs/API.md 第 3 节的 422 一行），
+        等于把一个英文报错摆到用户面前。
         """
         stripped = value.strip()
         if not stripped:
             raise ValueError("问题不能为空")
+        if len(stripped) > MAX_MESSAGE_LENGTH:
+            raise ValueError(f"问题最长 {MAX_MESSAGE_LENGTH} 个字")
         return stripped
+
+    @field_validator("category")
+    @classmethod
+    def _category_length(cls, value: str | None) -> str | None:
+        """分类同样要给出中文报错，理由同上。"""
+        if value is None:
+            return None
+        stripped = value.strip()
+        if len(stripped) > MAX_CATEGORY_LENGTH:
+            raise ValueError(f"分类最长 {MAX_CATEGORY_LENGTH} 个字")
+        return stripped or None
 
     @field_validator("history")
     @classmethod

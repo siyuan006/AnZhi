@@ -190,7 +190,7 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
 
 | 状态码 | `detail` 的含义 | 客户端应如何提示 |
 |:--:|---|---|
-| 422 | 参数不合法（`message` 为空/全空白/超过 1000 字符） | 直接展示 `errors[0].message` |
+| 422 | 参数不合法（`message` 为空/全空白/超过 1000 字符、`category` 超过 50 字符） | 直接展示 `errors[0].message` |
 | 502 | DeepSeek 返回了无法解析的内容 | 展示「服务暂时不可用，请稍后再试」 |
 | 503 | 未配置 `DEEPSEEK_API_KEY`，或上游鉴权失败、限流 | 原样展示，提示需要联系管理员 |
 | 504 | 调用 DeepSeek 超时（默认 60 秒） | 建议稍后重试 |
@@ -199,6 +199,13 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
 > 不是程序出错，用户看到 500 只会以为 App 坏了。当前仓库没有配置 Key，
 > 所以本接口现在返回的正是 503 + `AI 服务未配置，请联系管理员在后端 .env 中设置 DEEPSEEK_API_KEY`。
 > **因此 V1 的 AI 问答尚未端到端跑通** —— 链路代码已完成，缺的是一把真实的 Key。
+
+> **422 的每一条 `errors[0].message` 都保证是中文。** 客户端是把它**原样**
+> 贴到对话气泡里的，所以任何一条 Pydantic 内置约束漏出来，用户看到的就是
+> 「String should have at most 1000 characters」这种英文报错。
+> 长度校验因此一律写在 `field_validator` 里、对 `strip()` 之后的值判，
+> 不写成 `Field(max_length=…)` —— 后者作用在原始值上且在 validator 之前执行，
+> 「两个空格 + 正好 1000 个字」会被误判超长（`schemas/post.py` 记录过同一个坑）。
 
 422 的响应体会带上结构化的字段错误（`errors[0].message` 可直接展示）：
 
