@@ -115,7 +115,7 @@ const List<SafetyCategory> kCategories = <SafetyCategory>[
   ),
   SafetyCategory(
     id: 5,
-    name: '网络与反诈',
+    name: '网络与反诈安全',
     slug: 'cyber',
     icon: Icons.shield_outlined,
     color: Color(0xFF8E24AA),

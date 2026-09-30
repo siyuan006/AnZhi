@@ -27,8 +27,8 @@ class HealthResponse(BaseModel):
     version: str = Field(..., description="后端版本号")
     database: str = Field(
         ...,
-        description="数据库状态：pending（未接入）/ connected / error",
-        examples=["pending"],
+        description="数据库状态：connected / error",
+        examples=["connected"],
     )
     ai_service: str = Field(
         ...,

@@ -17,7 +17,7 @@
 | 3 | Flutter 项目创建 | ✅ 已完成 |
 | 4 | Flutter 五大页面 + 底部导航 | ✅ 已完成 |
 | 5 | FastAPI 后端 | ✅ 已完成 |
-| 6 | SQLite 数据库 | ⬜ 待开始 |
+| 6 | SQLite 数据库 | 🚧 进行中（1/3 批） |
 | 7 | 前后端通信 | ⬜ 待开始 |
 | 8 | 接入 DeepSeek | ⬜ 待开始 |
 | 9 | AI 安全控制（SafetyGuard） | ⬜ 待开始 |
@@ -31,16 +31,18 @@
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端骨架 + FastAPI 后端骨架完成。**
+**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 第一批表完成。**
 
 - 前端：可编译、可运行，已产出 debug APK；数据仍来自临时占位文件 `lib/core/sample_data.dart`
-- 后端：`uvicorn app.main:app` 可启动，`/` 与 `/api/health` 已实测返回正确响应
+- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health` 已实测返回正确响应
+- 数据库：`backend/anzhi.db` 已建 `users` / `categories` / `knowledge`，六大分类种子数据已写入
 
 尚未打通的部分（按阶段推进，不做假实现）：
 
 | 未完成项 | 现状 | 计划阶段 |
 |---|---|---|
-| SQLite 数据库 | `/api/health` 如实返回 `database: "pending"` | 6 |
+| 数据库其余表 | Favorite / History、Post / Comment / Like / UserSettings | 6（第 2、3 批） |
+| 知识卡片内容 | 表已建但**为空**：内容必须走「AI 初稿 → 人工审核 → 发布」 | 7 |
 | 前后端通信 | Flutter 仍读本地占位数据 | 7 |
 | DeepSeek AI 问答 | `/api/health` 返回 `ai_service: "not_configured"` | 8 |
 
@@ -222,6 +224,10 @@ cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
+
+# 初始化数据库（建表 + 写入六大分类，可重复执行）
+.venv\Scripts\python.exe -m app.database.init_db
+
 uvicorn app.main:app --reload
 ```
 
@@ -237,7 +243,7 @@ uvicorn app.main:app --reload
 
 ```bash
 cd backend
-.venv\Scripts\python.exe -m pytest      # 8 passed
+.venv\Scripts\python.exe -m pytest      # 28 passed
 ```
 
 ### API 配置

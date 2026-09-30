@@ -35,12 +35,13 @@ class TestHealth:
         assert body["status"] == "ok"
         assert body["version"] == "1.0.0"
 
-    def test_database_reports_pending_before_stage_six(self) -> None:
-        """SQLite 在第六阶段接入，此前必须如实报告 pending。
+    def test_database_status_is_really_probed(self) -> None:
+        """database 字段必须是真实探测结果，不是写死的常量。
 
-        谎报 connected 属于 PROJECT_SPEC 第一.12 明令禁止的「伪造接口状态」。
+        阶段 6 接入 SQLite 前它返回 pending；现在必须如实返回 connected。
+        无论何时，谎报状态都属于 PROJECT_SPEC 第一.12 禁止的「伪造接口状态」。
         """
-        assert client.get("/api/health").json()["database"] == "pending"
+        assert client.get("/api/health").json()["database"] == "connected"
 
     def test_ai_service_status_reflects_key_presence(self) -> None:
         """未配置 Key 时报告 not_configured，配置后报告 configured。"""
