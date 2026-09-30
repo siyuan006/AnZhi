@@ -24,19 +24,19 @@
 | 10 | 知识系统 | ✅ 已完成 |
 | 11 | 收藏 / 历史记录 | ✅ 已完成 |
 | 12 | 社区 | ✅ 已完成（列表 / 详情 / 评论 / 点赞 / 发帖 / 我的帖子 / 删帖） |
-| 13 | 个性化 | ⬜ 待开始 |
+| 13 | 个性化 | ✅ 已完成（关注领域 / 首页布局 / 通知设置 / 首页按设置显示与推荐） |
 | 14 | RAG | ⬜ 待开始 |
 | 15 | 测试 | ⬜ 待开始 |
 | 16 | UI 优化 | ⬜ 待开始 |
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 完整的社区互动（浏览 / 评论 / 点赞 / 发帖 / 删帖）。**
+**当前进度：Flutter 前端 + FastAPI 后端 + SQLite 数据库（9 张表）+ 前后端 HTTP 打通 + AI 问答链路 + 安全审查 + 知识详情与浏览计数 + 登录注册 + 收藏 + 浏览历史 + 完整的社区互动（浏览 / 评论 / 点赞 / 发帖 / 删帖）+ 个性化（关注领域 / 首页布局 / 通知设置）。**
 
-- 前端：可编译、可运行，已产出 debug APK；首页、知识页、知识详情页、AI 问答页、登录注册页、我的收藏页、浏览历史页、社区页、帖子详情页、发帖页、我的帖子页、我的页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态
-- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/knowledge/{id}`、`/api/knowledge/{id}/view`、`/api/chat`、`/api/auth/*`、`/api/favorites`、`/api/history`、`/api/posts`、`/api/posts/mine`、`/api/posts/{id}/comments`、`/api/posts/{id}/like` 已实测返回正确响应
+- 前端：可编译、可运行，已产出 debug APK；首页、知识页、知识详情页、AI 问答页、登录注册页、我的收藏页、浏览历史页、社区页、帖子详情页、发帖页、我的帖子页、我的页、关注领域页、首页布局页、通知设置页**均已改为调用真实接口**，按需显示加载 / 失败 / 空状态
+- 后端：`uvicorn app.main:app` 可启动，`/`、`/api/health`、`/api/categories`、`/api/knowledge`、`/api/knowledge/{id}`、`/api/knowledge/{id}/view`、`/api/chat`、`/api/auth/*`、`/api/favorites`、`/api/history`、`/api/posts`、`/api/posts/mine`、`/api/posts/{id}/comments`、`/api/posts/{id}/like`、`/api/settings` 已实测返回正确响应
 - 数据库：`backend/anzhi.db` 已建全部 9 张表，六大分类种子数据已写入
-- 联调：前端 316 个测试 + 后端 477 个测试全部通过；另有 59 个「真实后端」集成测试（默认跳过；开启后 48 通过 / 11 如实跳过，跳过的是依赖「知识库已发布内容」的那几组，而非空跑）
+- 联调：前端 354 个测试 + 后端 507 个测试全部通过；另有 68 个「真实后端」集成测试（默认跳过；开启后 42 通过 / 26 如实跳过，跳过的是依赖「知识库已发布内容」的那几组，而非空跑）
 
 尚未打通的部分（按阶段推进，不做假实现）：
 
@@ -46,9 +46,22 @@
 | **JWT_SECRET** | 未配置时开发环境每次启动随机生成，**后端一重启所有登录状态失效**；生产环境缺此项会拒绝启动 | 配置 `.env` 即可 |
 | 内容发布状态 | 12 条初稿已入库但**均为「待审核」**：`/api/knowledge` 因此如实返回空，App 首页与知识页显示「暂无内容」 | 待人工审核 |
 | **登录状态不持久化** | App 关闭后需要重新登录。持久化需要一个存储插件（如 `shared_preferences`），属新增第三方依赖，按 AI_RULES 第五节**未擅自引入** | 待确认后接入 |
+| **通知开关目前不生效** | V1.0 没有推送功能。开关会如实存下偏好，但页面上**明说「V1.0 还没有通知推送功能」**，不做一个看起来在生效的开关 | 后续版本 |
 | 社区里的搜索 | 搜索帖子尚未实现，按钮点了会**如实标注「后续版本」**而不是没反应 | 后续版本 |
 | 社区里的私信 / 关注 | V1.0 明确不做（PROJECT_SPEC 第二十节） | 不做 |
-| `GET /api/home` 首页聚合接口 | 首页改为直接调用 `/api/knowledge` 取前 5 条 | 13 |
+| `GET /api/home` 首页聚合接口 | 首页改为分别调用 `/api/knowledge`、`/api/posts`、`/api/settings` 三个接口 | 后续版本 |
+
+> **关于「关注领域 / 首页布局有什么效果」：** 两个开关都真的接到了首页上，
+> 不是只存一个偏好值：
+> - **首页布局**：关掉的模块不再渲染。五个全关掉时首页会说明「是你自己在
+>   首页布局里关掉的」，并给一条回去打开的路，而不是留一片空白
+> - **关注领域**：关注的分类通过 `GET /api/knowledge?prefer_categories=…`
+>   排到「推荐知识」前面。这是**排序偏好而不是筛选** ——
+>   关注消防不等于看不到别的领域，返回条数也不变
+>
+> 未登录时首页不发设置请求（没有账号可谈，发出去只会拿到 401），
+> 设置拉不到时按默认布局显示：首页的主体是安全知识，
+> 设置只是调整它的摆法，不该因为一次设置请求失败就变成错误页。
 
 > **关于「AI 问答还不能用」：** 阶段 8 完成的是**链路代码**——
 > 用户输入 → `POST /api/chat` → FastAPI → `ChatService` → DeepSeek → 结构化回答 → Flutter 渲染。
@@ -141,8 +154,8 @@ V2.0   ChatService
 AnZhi/
 ├── frontend/          Flutter 项目
 │   ├── lib/
-│   │   ├── services/  网络请求（api_client / knowledge_api / chat_api / auth_api / favorite_api / history_api / post_api）
-│   │   ├── pages/     五大页面 + 知识详情页 + 登录注册页 + 我的收藏页 + 浏览历史页 + 帖子详情页
+│   │   ├── services/  网络请求（api_client / knowledge_api / chat_api / auth_api / favorite_api / history_api / post_api / settings_api）
+│   │   ├── pages/     五大页面 + 知识详情页 + 登录注册页 + 我的收藏页 + 浏览历史页 + 帖子详情页 + 个性化设置三页
 │   │   ├── widgets/   通用组件
 │   │   ├── models/    数据模型
 │   │   └── core/      主题、常量、登录状态（auth_controller）、时间解析（relative_time）

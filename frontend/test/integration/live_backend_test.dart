@@ -8,6 +8,7 @@ import 'package:anzhi/models/knowledge_item.dart';
 import 'package:anzhi/models/like_state.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/models/post_item.dart';
+import 'package:anzhi/models/user_settings.dart';
 import 'package:anzhi/services/api_client.dart';
 import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/chat_api.dart';
@@ -15,6 +16,7 @@ import 'package:anzhi/services/favorite_api.dart';
 import 'package:anzhi/services/history_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:anzhi/services/post_api.dart';
+import 'package:anzhi/services/settings_api.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 /// 安知 —— 真实后端连通性测试
@@ -1355,6 +1357,178 @@ void main() {
           isFalse,
           reason: '发帖响应里出现了 username，登录名被挂到公开接口上了',
         );
+      });
+    },
+    skip: enabled
+        ? false
+        : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
+  );
+
+  // ---------------------------------------------------------------------------
+  // 个性化设置（阶段 13）
+  // ---------------------------------------------------------------------------
+
+  /// 带登录身份的设置接口。token 由「认证」组填上，
+  /// 因此这一组与收藏 / 历史一样有**顺序依赖**：单独 `--plain-name` 跑会 401。
+  final SettingsApi settings = SettingsApi(
+    client: ApiClient(
+      baseUrl: baseUrl,
+      timeout: const Duration(seconds: 5),
+      token: () => authToken,
+    ),
+  );
+
+  group(
+    '真实后端 · 个性化',
+    () {
+      test('未登录读设置是 401 与「请先登录」', () async {
+        final SettingsApi anonymous = SettingsApi(
+          client: ApiClient(baseUrl: baseUrl, timeout: const Duration(seconds: 5)),
+        );
+        addTearDown(anonymous.dispose);
+
+        await expectLater(
+          anonymous.fetch(),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                .having((ApiException e) => e.message, 'message', '请先登录'),
+          ),
+        );
+      });
+
+      test('没设置过的用户拿到的是默认值，不是 404', () async {
+        // 刚注册的账号一定还没有 user_settings 行。
+        // 后端若在这里返回 404，每个新用户第一次进「首页布局」都会看到报错。
+        final UserSettings current = await settings.fetch();
+
+        expect(
+          current.homeModules,
+          HomeModule.all.map((HomeModule m) => m.id).toList(),
+          reason: '默认应该是五个模块全开 —— 空数组在本模块里表示「全藏起来」',
+        );
+        expect(current.followedCategories, isEmpty);
+        expect(current.notifyEnabled, isTrue);
+      });
+
+      test('只改通知开关，不会把首页模块清空', () async {
+        // 列 `home_modules` 的 server_default 是 '[]'，而 '[]' 在本模块里
+        // 表示「所有模块都藏起来」。建行时若不显式给默认值，
+        // 用户只拨了一下通知开关，首页就变空了，而且没有任何报错。
+        final UserSettings before = await settings.fetch();
+
+        final UserSettings after = await settings.update(notifyEnabled: false);
+        addTearDown(() => settings.update(notifyEnabled: before.notifyEnabled));
+
+        expect(after.notifyEnabled, isFalse);
+        expect(
+          after.homeModules,
+          before.homeModules,
+          reason: '改通知不该动首页布局',
+        );
+        expect(after.homeModules, isNotEmpty, reason: '首页被清空了');
+      });
+
+      test('关注列表去重并按 id 升序', () async {
+        final UserSettings after = await settings.update(
+          followedCategories: <int>[5, 1, 5, 3],
+        );
+        addTearDown(() => settings.update(followedCategories: <int>[]));
+
+        expect(after.followedCategories, <int>[1, 3, 5]);
+      });
+
+      test('空数组是「全取消」，不是「这次不改」', () async {
+        // 两者混为一谈的话，用户永远取消不掉最后一个关注领域
+        await settings.update(followedCategories: <int>[1]);
+        final UserSettings after =
+            await settings.update(followedCategories: <int>[]);
+
+        expect(after.followedCategories, isEmpty);
+
+        // 反过来说，什么都不传不该把已存的清掉
+        final UserSettings withFollow = await settings.update(
+          followedCategories: <int>[1],
+        );
+        expect(withFollow.followedCategories, <int>[1]);
+
+        final UserSettings untouched = await settings.update(notifyEnabled: true);
+        expect(
+          untouched.followedCategories,
+          <int>[1],
+          reason: '请求体里没有 followed_categories，就不该动它',
+        );
+      });
+
+      test('不存在的分类是 404，并点名是哪一个', () async {
+        await expectLater(
+          settings.update(followedCategories: <int>[1, 999999]),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 404)
+                .having((ApiException e) => e.message, 'message', contains('999999')),
+          ),
+        );
+      });
+
+      test('不存在的首页模块是 422，并点名是哪一个', () async {
+        await expectLater(
+          settings.update(homeModules: <String>['daily', 'nope']),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 422)
+                .having((ApiException e) => e.message, 'message', contains('nope')),
+          ),
+        );
+      });
+
+      test('改完能读回来（确实落库了，不是只回显）', () async {
+        await settings.update(
+          followedCategories: <int>[2],
+          homeModules: <String>['daily', 'community'],
+          notifyEnabled: false,
+        );
+        addTearDown(() => settings.update(
+              followedCategories: <int>[],
+              homeModules: HomeModule.all.map((HomeModule m) => m.id).toList(),
+              notifyEnabled: true,
+            ));
+
+        final UserSettings reread = await settings.fetch();
+
+        expect(reread.followedCategories, <int>[2]);
+        expect(reread.homeModules, <String>['daily', 'community']);
+        expect(reread.notifyEnabled, isFalse);
+      });
+
+      test('prefer_categories 只改变排序，不减条数', () async {
+        // 这条靠客户端解析后的结果来验，而不是只看状态码 ——
+        // 后端把偏好实现成筛选也能返回 200，只有数量对不上才看得出来。
+        final PagedResult<KnowledgeItem> plain =
+            await api.fetchKnowledge(pageSize: 100);
+        if (plain.total == 0) {
+          markTestSkipped('库里没有已发布内容，排序无从验证');
+          return;
+        }
+
+        final PagedResult<KnowledgeItem> preferred =
+            await api.fetchKnowledge(pageSize: 100, preferCategoryIds: <int>[1]);
+
+        expect(
+          preferred.total,
+          plain.total,
+          reason: '关注一个领域不该让用户看不到别的领域',
+        );
+        expect(preferred.items.length, plain.items.length);
+
+        final bool hasFire = plain.items.any((KnowledgeItem i) => i.categoryId == 1);
+        if (hasFire && plain.items.first.categoryId != 1) {
+          expect(
+            preferred.items.first.categoryId,
+            1,
+            reason: '库里明明有消防安全的内容，却没有排到最前',
+          );
+        }
       });
     },
     skip: enabled
