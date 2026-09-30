@@ -53,7 +53,10 @@ backend/
 │   │   │   ├── risk_service.py      风险判断（预留）
 │   │   │   ├── rag_service.py       知识检索（预留）
 │   │   │   └── safety_guard.py      回答安全审查（预留）
-│   │   └── knowledge/               知识卡片业务逻辑
+│   │   ├── knowledge/               知识卡片业务逻辑
+│   │   ├── community/               社区：帖子 / 评论 / 点赞
+│   │   ├── personalization/         个性化设置（关注分类、首页模块）
+│   │   └── auth/                    注册、登录、密码与令牌
 │   ├── models/              SQLAlchemy 数据库模型
 │   ├── database/            连接、会话、初始化
 │   └── config/              环境变量读取与配置对象

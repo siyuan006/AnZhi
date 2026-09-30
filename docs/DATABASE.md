@@ -225,12 +225,24 @@ cd backend
 | `id` | INTEGER | PK, AUTOINCREMENT | 主键 |
 | `user_id` | INTEGER | FK → users.id, UNIQUE | 用户（1:1） |
 | `followed_categories` | TEXT | DEFAULT '[]' | 关注分类 ID，JSON 数组 |
-| `home_modules` | TEXT | DEFAULT '[]' | 首页模块显示配置，JSON |
+| `home_modules` | TEXT | DEFAULT '[]' | 首页要显示的模块键，JSON 数组 |
 | `notify_enabled` | BOOLEAN | DEFAULT true | 通知开关 |
 | `created_at` | DATETIME | DEFAULT now | 创建时间 |
 | `updated_at` | DATETIME | | 更新时间 |
 
-> SQLite 无原生数组类型，`followed_categories` 以 JSON 字符串存储，SQLAlchemy 层负责序列化。
+> SQLite 无原生数组类型，`followed_categories` 与 `home_modules` 以 JSON 字符串
+> 存储，SQLAlchemy 层负责序列化 —— 模型里必须用 `MutableList.as_mutable(JSON)` 包一层，
+> 否则对这个字段的**原地修改不会被写进数据库，而且不报任何错**。
+
+**行不是每个用户都有的。** 只有**写过**设置的用户在表里才有行
+（`GET /api/settings` 不建行，见 `settings_service` 的模块文档）。
+因此代码里不能假设「查到用户就一定有对应的设置行」。
+
+⚠️ `home_modules` 的列默认值是 `'[]'`，而空数组在业务语义里表示
+**「用户把首页模块全藏起来了」**。所以 `PUT /api/settings` 建行时
+**必须显式写入默认模块列表**：只改通知开关的用户如果被塞进一个 `'[]'`，
+他会莫名其妙得到一个空首页，且不报任何错。`followed_categories` 没有这个问题 ——
+`'[]'` 在那边就是「谁也没关注」，与默认值一致。
 
 ---
 
