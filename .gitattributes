@@ -1,0 +1,48 @@
+# 统一换行符，避免 Windows / macOS / Linux 协作时全文件 diff
+* text=auto eol=lf
+
+# Python
+*.py    text eol=lf
+*.pyi   text eol=lf
+*.txt   text eol=lf
+*.cfg   text eol=lf
+*.toml  text eol=lf
+*.ini   text eol=lf
+
+# Dart / Flutter
+*.dart  text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+
+# 脚本
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Windows 批处理必须 CRLF，否则可能执行失败
+gradlew.bat text eol=crlf
+
+# 文档与标记
+*.md    text eol=lf
+*.json  text eol=lf
+
+# 二进制文件 —— 不做换行转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.svg   text eol=lf
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.jar   binary
+*.keystore binary
+*.jks   binary
+*.zip   binary
+*.apk   binary
+*.aab   binary
+*.db    binary
