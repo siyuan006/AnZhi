@@ -18,6 +18,11 @@ sqlalchemy==2.1.1
 # 配置
 python-dotenv==1.2.3
 
+# 认证（第十一阶段：收藏 / 历史记录需要用户身份）
+# bcrypt 只用来算口令哈希，PyJWT 只用来签发 token
+bcrypt==5.0.0
+PyJWT==2.15.1
+
 # 测试
 pytest==9.1.1
 httpx==0.28.1

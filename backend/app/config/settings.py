@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -89,6 +90,29 @@ class Settings:
         # 大模型生成一段回答通常需要十几秒，超时给得太短会大量误报失败。
         # 但仍必须有上限：没有超时的话，上游卡住会让请求一直挂着。
         self.deepseek_timeout: float = float(_get_int("DEEPSEEK_TIMEOUT", 60))
+
+        # ---- 登录认证（第十一阶段）----
+        # JWT 签名密钥。与 API Key 同级别：只允许存在于 backend/.env。
+        # 代码里**没有**默认值 —— 一个写死的默认密钥等于没有密钥，
+        # 任何人都能用它伪造出合法的 token。
+        self.jwt_secret: str = os.getenv("JWT_SECRET", "").strip()
+        self.jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+        self.jwt_expire_minutes: int = _get_int("JWT_EXPIRE_MINUTES", 60 * 24 * 7)
+
+        # 没配密钥时的两种处理，都不允许「悄悄用一个固定值」：
+        #   生产环境 —— 直接拒绝启动。用临时密钥签发 token 会让人以为
+        #               登录是安全的，实际上重启即失效，还可能被伪造。
+        #   开发环境 —— 每次启动随机生成一把，并在启动日志里说明
+        #               「重启后需要重新登录」，行为诚实且不阻塞开发。
+        self.jwt_secret_is_ephemeral: bool = False
+        if not self.jwt_secret:
+            if self.is_production:
+                raise RuntimeError(
+                    "生产环境必须配置 JWT_SECRET（backend/.env）——"
+                    "拒绝用一个重启即失效的临时密钥对外提供登录服务"
+                )
+            self.jwt_secret = secrets.token_urlsafe(48)
+            self.jwt_secret_is_ephemeral = True
 
     @property
     def is_ai_configured(self) -> bool:

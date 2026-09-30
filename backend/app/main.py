@@ -45,6 +45,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             "问答链路代码已就绪，缺的只是一把真实的 Key"
             "（复制 backend/.env.example 为 backend/.env 并填写）"
         )
+
+    # 临时密钥必须说出来。不说的话，用户会以为「登录好了」，
+    # 直到重启后端才发现所有人被登出 —— 那时更难查。
+    if settings.jwt_secret_is_ephemeral:
+        logger.warning(
+            "未检测到 JWT_SECRET，本次启动使用随机临时密钥 —— "
+            "**后端重启后所有已登录用户都需要重新登录**。"
+            "长期使用请在 backend/.env 中配置 JWT_SECRET"
+            "（生产环境缺此项会直接拒绝启动）"
+        )
     yield
     logger.info("安知后端已停止")
 
