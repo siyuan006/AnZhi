@@ -1,6 +1,9 @@
 import 'dart:convert';
 
+import 'package:anzhi/core/auth_controller.dart';
 import 'package:anzhi/services/api_client.dart';
+import 'package:anzhi/services/auth_api.dart';
+import 'package:anzhi/services/auth_store.dart';
 import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:http/http.dart' as http;
@@ -40,6 +43,32 @@ class FakeBackend {
 
   /// 响应延迟，用于验证超时分支
   Duration? delay;
+
+  // --- 认证（/api/auth/*）-------------------------------------------------
+  //
+  // 假后端**不实现真正的认证**（不验签、不哈希）：
+  // 它只需要让客户端相信「登录成功了」，从而驱动登录后的界面。
+  // 验签与哈希由后端的测试负责 —— 那才是它们真正运行的地方。
+
+  /// 已注册的账号：用户名 -> 密码
+  final Map<String, String> accounts = <String, String>{};
+
+  /// 用户名 -> 用户 id
+  final Map<String, int> accountIds = <String, int>{};
+
+  /// 设为非 null 时，`/api/auth/me` 返回该状态码（用于验证「token 已失效」）
+  int? meErrorStatus;
+
+  /// 依次收到的 Authorization 头，用来断言「token 确实带上了」
+  final List<String?> authHeaders = <String?>[];
+
+  /// 发出 token 时用的前缀，便于断言它确实是个 bearer token
+  static const String _tokenPrefix = 'fake-token-for-';
+
+  String _tokenFor(String username) => '$_tokenPrefix$username';
+
+  int _idFor(String username) =>
+      accountIds.putIfAbsent(username, () => accountIds.length + 1);
 
   // --- AI 问答（POST /api/chat）-------------------------------------------
 
@@ -113,8 +142,47 @@ class FakeBackend {
         timeout: timeout,
       );
 
+  /// 认证接口。带上 [token] 读取回调，与生产路径一致 ——
+  /// 请求头里会实时带上当前 token。
+  AuthApi authApi({String? Function()? token}) => AuthApi(
+        client: ApiClient(
+          httpClient: httpClient,
+          baseUrl: 'http://test.local',
+          token: token,
+        ),
+      );
+
+  /// 供页面测试注入的登录状态，连着一个假后端。
+  ///
+  /// 注入底层 http 客户端而不是 AuthApi：token 的接线由
+  /// AuthController 自己负责，测试不必（也不应该）替它接一遍。
+  AuthController authController({AuthStore? store}) => AuthController(
+        httpClient: httpClient,
+        baseUrl: 'http://test.local',
+        store: store ?? MemoryAuthStore(),
+      );
+
+  /// 预置一个已注册的账号
+  void seedAccount(String username, String password, {String? nickname}) {
+    accounts[username] = password;
+    _idFor(username);
+    nicknames[username] = nickname;
+  }
+
+  /// 用户名 -> 昵称
+  final Map<String, String?> nicknames = <String, String?>{};
+
+  Map<String, dynamic> _userJson(String username) => <String, dynamic>{
+        'id': _idFor(username),
+        'username': username,
+        'nickname': nicknames[username],
+        'avatar_url': null,
+        'study_days': 0,
+      };
+
   Future<http.Response> _handle(http.Request request) async {
     requests.add(request.url);
+    authHeaders.add(request.headers['Authorization']);
 
     // 必须在延迟之前记录请求体：否则「请求已发出但还没返回」这段时间里，
     // 记录是空的，用例会把在途请求误判成「压根没发出去」。
@@ -150,6 +218,12 @@ class FakeBackend {
     }
 
     final String path = request.url.path;
+
+    // 认证接口与知识接口的失败语义不同，单独走一条分支
+    if (path.startsWith('/api/auth/')) {
+      return _handleAuth(request, path);
+    }
+
     if (path == '/api/knowledge') {
       return _json(_filtered(request.url.queryParameters), 200);
     }
@@ -191,6 +265,89 @@ class FakeBackend {
   }
 
   bool _exists(int id) => items.any((Map<String, dynamic> item) => item['id'] == id);
+
+  /// 认证相关的响应。
+  ///
+  /// 这里刻意复述了后端的状态码约定（400 / 401 / 409），
+  /// 是为了让客户端**按状态码分支处理**这件事在测试里也被覆盖到 ——
+  /// 全部返回 200 的话，客户端把失败当成功也测不出来。
+  Future<http.Response> _handleAuth(http.Request request, String path) async {
+    if (path == '/api/auth/me') {
+      if (meErrorStatus != null) {
+        return _json(
+          <String, dynamic>{'detail': '请先登录'},
+          meErrorStatus!,
+        );
+      }
+      final String? username = _usernameFromHeader(request);
+      if (username == null) {
+        return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+      }
+      return _json(_userJson(username), 200);
+    }
+
+    if (path == '/api/auth/register') {
+      final Map<String, dynamic> body = _body(request);
+      final String username = (body['username'] as String? ?? '').trim();
+      final String password = body['password'] as String? ?? '';
+
+      if (username.isEmpty || password.isEmpty) {
+        return _json(<String, dynamic>{'detail': '用户名和密码都要填'}, 400);
+      }
+      if (accounts.containsKey(username)) {
+        return _json(<String, dynamic>{'detail': '该用户名已被注册'}, 409);
+      }
+      if (password.length < 8) {
+        return _json(<String, dynamic>{'detail': '密码至少 8 位'}, 400);
+      }
+
+      seedAccount(
+        username,
+        password,
+        nickname: body['nickname'] as String?,
+      );
+      return _json(_sessionJson(username), 201);
+    }
+
+    if (path == '/api/auth/login') {
+      final Map<String, dynamic> body = _body(request);
+      final String username = (body['username'] as String? ?? '').trim();
+      final String password = body['password'] as String? ?? '';
+
+      // 与后端保持一致：用户名不存在与密码错误返回同一句话
+      if (accounts[username] != password) {
+        return _json(<String, dynamic>{'detail': '用户名或密码不正确'}, 401);
+      }
+      return _json(_sessionJson(username), 200);
+    }
+
+    return _json(<String, dynamic>{'detail': '接口不存在'}, 404);
+  }
+
+  Map<String, dynamic> _sessionJson(String username) => <String, dynamic>{
+        'access_token': _tokenFor(username),
+        'token_type': 'bearer',
+        'expires_in': 604800,
+        'user': _userJson(username),
+      };
+
+  /// 从 Authorization 头里还原出用户名。
+  ///
+  /// 假 token 就是把用户名拼在前缀后面，因此这里能反解出来 ——
+  /// 这样「带着 A 的 token 访问，拿到的是 A 的资料」在测试里也成立。
+  String? _usernameFromHeader(http.Request request) {
+    final String? header = request.headers['Authorization'];
+    if (header == null || !header.startsWith('Bearer ')) return null;
+    final String token = header.substring('Bearer '.length);
+    if (!token.startsWith(_tokenPrefix)) return null;
+    final String username = token.substring(_tokenPrefix.length);
+    return accounts.containsKey(username) ? username : null;
+  }
+
+  Map<String, dynamic> _body(http.Request request) {
+    if (request.bodyBytes.isEmpty) return <String, dynamic>{};
+    return jsonDecode(utf8.decode(request.bodyBytes)) as Map<String, dynamic>;
+  }
 
   /// 模拟服务端筛选，返回统一分页结构
   Map<String, dynamic> _filtered(Map<String, String> query) {

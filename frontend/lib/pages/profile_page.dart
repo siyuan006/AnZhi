@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 
 import '../core/app_constants.dart';
 import '../core/app_theme.dart';
+import '../core/auth_controller.dart';
+import 'login_page.dart';
 
 /// 安知 —— 我的页面
 ///
@@ -9,8 +11,8 @@ import '../core/app_theme.dart';
 ///   个人信息 · 学习天数 · 收藏 · 历史记录 · 我的帖子
 ///   关注领域 · 首页布局 · 通知设置 · 关于安知
 ///
-/// ⚠️ 除「关于安知」外，其余入口的功能将在阶段 11、13 实现，
-/// 点击会给出明确的阶段提示。
+/// ⚠️ 社区与个性化相关的入口（我的帖子 / 关注领域 / 首页布局 / 通知设置）
+/// 将在阶段 12、13 实现，点击会给出明确的阶段提示。
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
@@ -34,12 +36,12 @@ class ProfilePage extends StatelessWidget {
               _MenuItem(
                 icon: Icons.star_outline_rounded,
                 label: '我的收藏',
-                stage: '阶段 11',
+                onTap: () => _openLoginFirst(context, '我的收藏'),
               ),
               _MenuItem(
                 icon: Icons.history_rounded,
                 label: '浏览历史',
-                stage: '阶段 11',
+                onTap: () => _openLoginFirst(context, '浏览历史'),
               ),
               _MenuItem(
                 icon: Icons.article_outlined,
@@ -93,6 +95,32 @@ class ProfilePage extends StatelessWidget {
     );
   }
 
+  /// 收藏与历史都需要登录。
+  ///
+  /// 未登录时**推登录页而不是弹一句「请先登录」** ——
+  /// 用户点了「我的收藏」，意图是明确的，此时直接给他登录入口
+  /// 比让他自己回头去找要顺手得多。
+  Future<void> _openLoginFirst(BuildContext context, String feature) async {
+    final AuthController? auth = AuthScope.maybeOf(context);
+    if (auth == null) return;
+
+    if (auth.isLoggedIn) {
+      // 收藏页 / 历史页属阶段 11 的后续提交，此时如实说明
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('「$feature」页面即将在此版本的后续提交里接入'),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    await Navigator.of(context).push<bool>(
+      MaterialPageRoute<bool>(builder: (_) => const LoginPage()),
+    );
+  }
+
   void _showAbout(BuildContext context) {
     showDialog<void>(
       context: context,
@@ -142,6 +170,10 @@ class _ProfileHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final ThemeData theme = Theme.of(context);
+    // 跟着 AuthController 变化重建：登录 / 登出后这里要立刻换形态
+    final AuthController? auth = AuthScope.maybeOf(context);
+
+    final bool loggedIn = auth?.isLoggedIn ?? false;
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -154,15 +186,25 @@ class _ProfileHeader extends StatelessWidget {
           Container(
             width: 52,
             height: 52,
+            alignment: Alignment.center,
             decoration: BoxDecoration(
               color: theme.colorScheme.primaryContainer,
               borderRadius: BorderRadius.circular(16),
             ),
-            child: Icon(
-              Icons.person_rounded,
-              size: 28,
-              color: theme.colorScheme.primary,
-            ),
+            child: loggedIn
+                ? Text(
+                    auth!.user!.initial,
+                    style: TextStyle(
+                      fontSize: 21,
+                      fontWeight: FontWeight.w800,
+                      color: theme.colorScheme.primary,
+                    ),
+                  )
+                : Icon(
+                    Icons.person_rounded,
+                    size: 28,
+                    color: theme.colorScheme.primary,
+                  ),
           ),
           const SizedBox(width: 14),
           Expanded(
@@ -170,43 +212,97 @@ class _ProfileHeader extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  '未登录',
+                  loggedIn ? auth!.user!.displayName : '未登录',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w700,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
                 const SizedBox(height: 3),
                 Text(
-                  '登录功能将在阶段 11 实现',
+                  // 刻意说明「不登录也能查知识」：
+                  // 否则用户会以为必须注册才能用这个 App
+                  loggedIn
+                      ? '@${auth!.user!.username}'
+                      : '登录后可以收藏知识、保留浏览历史',
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: theme.colorScheme.onSurfaceVariant,
                   ),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
           ),
-          // 学习天数占位
-          Column(
-            children: <Widget>[
-              Text(
-                '--',
-                style: theme.textTheme.titleLarge?.copyWith(
-                  fontWeight: FontWeight.w800,
-                  color: theme.colorScheme.primary,
-                ),
-              ),
-              Text(
-                '学习天数',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: theme.colorScheme.onSurfaceVariant,
-                  fontSize: 11.5,
-                ),
-              ),
-            ],
-          ),
+          const SizedBox(width: 8),
+          _HeaderAction(auth: auth),
         ],
       ),
     );
+  }
+}
+
+/// 登录 / 登出按钮。
+class _HeaderAction extends StatelessWidget {
+  const _HeaderAction({this.auth});
+
+  final AuthController? auth;
+
+  @override
+  Widget build(BuildContext context) {
+    // 没有 AuthScope（例如单页测试）时整个按钮不显示，
+    // 而不是显示一个点了会崩的按钮
+    if (auth == null) return const SizedBox.shrink();
+
+    if (!auth!.isLoggedIn) {
+      return FilledButton(
+        onPressed: () => Navigator.of(context).push<bool>(
+          MaterialPageRoute<bool>(builder: (_) => const LoginPage()),
+        ),
+        style: FilledButton.styleFrom(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          minimumSize: const Size(0, 36),
+          visualDensity: VisualDensity.compact,
+        ),
+        child: const Text('登录', style: TextStyle(fontSize: 13.5)),
+      );
+    }
+
+    return TextButton(
+      onPressed: () => _confirmLogout(context, auth!),
+      style: TextButton.styleFrom(
+        padding: const EdgeInsets.symmetric(horizontal: 10),
+        minimumSize: const Size(0, 36),
+        visualDensity: VisualDensity.compact,
+      ),
+      child: const Text('退出', style: TextStyle(fontSize: 13.5)),
+    );
+  }
+
+  /// 登出前问一句 —— 这是个不可撤销的操作（本地 token 会被清掉）。
+  Future<void> _confirmLogout(BuildContext context, AuthController auth) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('退出登录'),
+          content: const Text('退出后需要重新输入用户名和密码。'),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('取消'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('退出'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed ?? false) await auth.logout();
   }
 }
 

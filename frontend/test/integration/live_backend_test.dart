@@ -1,8 +1,10 @@
 import 'package:anzhi/core/app_constants.dart';
 import 'package:anzhi/models/ai_answer.dart';
+import 'package:anzhi/models/auth_user.dart';
 import 'package:anzhi/models/knowledge_item.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/services/api_client.dart';
+import 'package:anzhi/services/auth_api.dart';
 import 'package:anzhi/services/chat_api.dart';
 import 'package:anzhi/services/knowledge_api.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -46,6 +48,32 @@ void main() {
   final ChatApi chat = ChatApi(
     client: ApiClient(baseUrl: baseUrl, timeout: ApiConfig.aiTimeout),
   );
+
+  // 认证同样用独立的 ApiClient：token 每次请求时从这个变量现取。
+  // 测试会在登录成功后把它设上，于是后续请求自动带上 Authorization。
+  String? authToken;
+  final AuthApi authApi = AuthApi(
+    client: ApiClient(
+      baseUrl: baseUrl,
+      timeout: const Duration(seconds: 5),
+      token: () => authToken,
+    ),
+  );
+
+  /// 本次运行创建的账号名。
+  ///
+  /// **这些用例会在真实数据库里创建用户。** 名字带固定前缀便于事后清理，
+  /// 后缀用 base36 的时间戳而不是十进制 —— 用户名上限 20 个字符，
+  /// 十进制毫秒时间戳有 13 位，加上前缀会直接超标。
+  final String accountName =
+      'lcheck${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+  const String accountPassword = 'live-check-password';
+
+  tearDownAll(() {
+    api.dispose();
+    chat.dispose();
+    authApi.dispose();
+  });
 
   group(
     '真实后端',
@@ -234,8 +262,137 @@ void main() {
         : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
   );
 
-  tearDownAll(() {
-    api.dispose();
-    chat.dispose();
-  });
+  group(
+    '真实后端 · 认证',
+    () {
+      test('注册：返回的 token 立刻能用，且响应里没有密码', () async {
+        final AuthSession session = await authApi.register(
+          username: accountName,
+          password: accountPassword,
+        );
+        authToken = session.token;
+
+        expect(session.token, isNotEmpty);
+        expect(session.user.username, accountName);
+
+        // 拿刚发的 token 换用户 —— 通得过才说明 token 真被后端认了
+        final AuthUser me = await authApi.me();
+        expect(me.id, session.user.id);
+      });
+
+      test('用户名重复注册返回 409 与中文说明', () async {
+        await expectLater(
+          authApi.register(
+            username: accountName,
+            password: accountPassword,
+          ),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 409)
+                .having((ApiException e) => e.message, 'message', '该用户名已被注册'),
+          ),
+        );
+      });
+
+      test('密码错误与用户名不存在返回同一句话', () async {
+        // 两种情况给出不同提示，等于提供了一个枚举用户名的接口
+        final String wrongPassword = await _loginProblem(
+          authApi,
+          username: accountName,
+          password: 'definitely-wrong',
+        );
+        final String unknownUser = await _loginProblem(
+          authApi,
+          username: 'livecheck-nobody-${DateTime.now().microsecondsSinceEpoch}',
+          password: accountPassword,
+        );
+
+        expect(wrongPassword, '用户名或密码不正确');
+        expect(unknownUser, '用户名或密码不正确');
+      });
+
+      test('登录成功后能再换一次用户', () async {
+        final AuthSession session = await authApi.login(
+          username: accountName,
+          password: accountPassword,
+        );
+        authToken = session.token;
+
+        expect((await authApi.me()).username, accountName);
+      });
+
+      test('不带 token 访问 /me 返回 401 与「请先登录」', () async {
+        // 换一个没有 token 的客户端。用一个可变的临时变量而不是
+        // 把 authToken 清掉：清掉会让同一个 group 里后面的用例失去登录态。
+        String? none;
+        final AuthApi anonymous = AuthApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => none),
+        );
+        addTearDown(anonymous.dispose);
+
+        await expectLater(
+          anonymous.me(),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                .having((ApiException e) => e.message, 'message', '请先登录'),
+          ),
+        );
+      });
+
+      test('伪造的 token 会被拒绝', () async {
+        String? forged = 'not.a.real.token';
+        final AuthApi faker = AuthApi(
+          client: ApiClient(baseUrl: baseUrl, token: () => forged),
+        );
+        addTearDown(faker.dispose);
+
+        await expectLater(
+          faker.me(),
+          throwsA(
+            isA<ApiException>().having(
+              (ApiException e) => e.statusCode,
+              'statusCode',
+              401,
+            ),
+          ),
+        );
+      });
+
+      test('超长中文密码被拦下，且给出能看懂的原因', () async {
+        // 25 个汉字 = 75 字节，超过 bcrypt 的 72 字节上限。
+        // 后端不显式校验的话这里会变成 500。
+        final String name =
+            'lcpw${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}';
+        await expectLater(
+          authApi.register(username: name, password: '安' * 25),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 400)
+                .having((ApiException e) => e.message, 'message', contains('汉字')),
+          ),
+        );
+      });
+    },
+    skip: enabled
+        ? false
+        : '需要运行中的后端，用 --dart-define=ANZHI_LIVE_BACKEND=true 开启',
+  );
+}
+
+/// 调一次登录，把失败原因取出来。
+///
+/// `login` 失败时抛的是 ApiException，这里统一转成字符串，
+/// 便于两条失败路径直接比较「提示是否一模一样」。
+Future<String> _loginProblem(
+  AuthApi api, {
+  required String username,
+  required String password,
+}) async {
+  try {
+    await api.login(username: username, password: password);
+    return '（竟然登录成功了）';
+  } on ApiException catch (error) {
+    return error.message;
+  }
 }

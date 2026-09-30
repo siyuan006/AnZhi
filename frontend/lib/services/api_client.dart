@@ -96,11 +96,15 @@ class ApiException implements Exception {
 
 /// 极简 JSON 客户端。
 ///
-/// 目前只有 GET 与 POST —— 对应后端已实现的两类接口。
+/// 目前只有 GET / POST / DELETE —— 对应后端已实现的三类接口。
 /// 需要时再扩展，不预先写一堆用不到的代码。
 class ApiClient {
-  ApiClient({http.Client? httpClient, String? baseUrl, Duration? timeout})
-      : _http = httpClient ?? http.Client(),
+  ApiClient({
+    http.Client? httpClient,
+    String? baseUrl,
+    Duration? timeout,
+    this.token,
+  })  : _http = httpClient ?? http.Client(),
         _baseUrl = baseUrl ?? ApiConfig.baseUrl,
         _timeout = timeout ?? ApiConfig.timeout;
 
@@ -109,6 +113,28 @@ class ApiClient {
 
   /// 可覆盖，便于测试用极短超时验证超时分支
   final Duration _timeout;
+
+  /// 取当前登录 token 的回调；未登录时返回 `null`。
+  ///
+  /// 做成**回调而不是字段**，是因为 token 会在运行中变化
+  /// （登录、登出、换账号），而 client 实例是长期复用的。
+  /// 存成字段的话，登录后必须把整个 client 换掉才生效 ——
+  /// 那种「有的页面用的是新 client、有的还用旧的」很难查。
+  final String? Function()? token;
+
+  /// 统一的请求头。
+  ///
+  /// token 每次请求时现取，保证用的永远是最新的一枚。
+  Map<String, String> _headers({bool json = false}) {
+    final Map<String, String> headers = <String, String>{};
+    if (json) headers['Content-Type'] = 'application/json; charset=utf-8';
+
+    final String? value = token?.call();
+    if (value != null && value.isNotEmpty) {
+      headers['Authorization'] = 'Bearer $value';
+    }
+    return headers;
+  }
 
   /// 发起 GET 请求并返回解析后的 JSON。
   ///
@@ -122,7 +148,7 @@ class ApiClient {
     final Uri uri = Uri.parse('$_baseUrl$path').replace(
       queryParameters: _cleanQuery(query),
     );
-    return _send(() => _http.get(uri), timeout);
+    return _send(() => _http.get(uri, headers: _headers()), timeout);
   }
 
   /// 发起 POST 请求并返回解析后的 JSON。
@@ -138,13 +164,21 @@ class ApiClient {
     return _send(
       () => _http.post(
         uri,
-        headers: const <String, String>{
-          'Content-Type': 'application/json; charset=utf-8',
-        },
+        headers: _headers(json: true),
         body: utf8.encode(jsonEncode(body)),
       ),
       timeout,
     );
+  }
+
+  /// 发起 DELETE 请求并返回解析后的 JSON。
+  ///
+  /// 取消收藏、删除历史记录都走这里。后端的 DELETE 是**幂等**的：
+  /// 删一条本来就不存在的记录同样返回成功，而不是 404 ——
+  /// 客户端重试或两个页面同时删，不该让用户看到一个错误弹窗。
+  Future<Object?> deleteJson(String path, {Duration? timeout}) {
+    final Uri uri = Uri.parse('$_baseUrl$path');
+    return _send(() => _http.delete(uri, headers: _headers()), timeout);
   }
 
   /// 统一的「发请求 → 翻译失败 → 解析响应」流程。
