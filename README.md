@@ -639,6 +639,12 @@ adb install -r build\app\outputs\flutter-apk\app-release.apk
 
 也可以把 APK 传到手机上点击安装（需在系统设置里允许「安装未知来源应用」）。
 
+> **尚未在真机上实测安装。** 开发机没有连接 Android 设备，也未安装模拟器组件，
+> 所以只能验证到包本身合法：`apksigner verify` 通过（v2 签名方案，与
+> `minSdk` 24 相匹配）、`zipalign -c` 通过、zip 结构完整、`aapt dump badging`
+> 读出的包名 / 版本 / 应用名 / SDK 区间都正确。**「点一下能装上、能跑起来」
+> 这一步需要在有设备的机器上补做。**
+
 ---
 
 ## 开发规范
