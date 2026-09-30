@@ -325,6 +325,8 @@ class _CategoryChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
     return Padding(
       padding: const EdgeInsets.only(right: 8),
       child: Material(
@@ -341,7 +343,7 @@ class _CategoryChip extends StatelessWidget {
               border: Border.all(
                 color: selected
                     ? color.withValues(alpha: 0.5)
-                    : const Color(0xFFE2E7EE),
+                    : theme.colorScheme.outlineVariant,
               ),
             ),
             child: Text(
@@ -349,7 +351,7 @@ class _CategoryChip extends StatelessWidget {
               style: TextStyle(
                 fontSize: 13,
                 fontWeight: selected ? FontWeight.w700 : FontWeight.w400,
-                color: selected ? color : const Color(0xFF5A6472),
+                color: selected ? color : theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),

@@ -329,9 +329,12 @@ class _HistoryPageState extends State<HistoryPage> {
           color: kSurfaceColor,
           borderRadius: BorderRadius.circular(kCardRadius),
         ),
-        child: const Text(
+        child: Text(
           '这条内容已下架',
-          style: TextStyle(fontSize: 13.5, color: Color(0xFF9AA4B2)),
+          style: TextStyle(
+            fontSize: 13.5,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
+          ),
         ),
       );
     }

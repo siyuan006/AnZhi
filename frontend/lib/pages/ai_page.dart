@@ -6,6 +6,7 @@ import '../models/ai_answer.dart';
 import '../services/api_client.dart';
 import '../services/chat_api.dart';
 import '../services/knowledge_api.dart';
+import '../widgets/notice_card.dart';
 import '../widgets/risk_badge.dart';
 import 'knowledge_detail_page.dart';
 
@@ -295,35 +296,9 @@ class _SafetyNotice extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(13),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF6E5),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: const Color(0xFFFFE0A3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const Icon(
-            Icons.info_outline_rounded,
-            size: 17,
-            color: Color(0xFFB26A00),
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              '遇到紧急危险，请立即拨打 119 / 120 / 110，'
-              '不要因为等待 App 回答而延误处置。',
-              style: TextStyle(
-                fontSize: 12.5,
-                height: 1.55,
-                color: const Color(0xFF8A5300),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return const NoticeCard(
+      text: '遇到紧急危险，请立即拨打 119 / 120 / 110，'
+          '不要因为等待 App 回答而延误处置。',
     );
   }
 }
@@ -393,35 +368,10 @@ class _ErrorBubble extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    return NoticeCard(
+      text: text,
+      radius: 14,
       margin: const EdgeInsets.only(bottom: 14, right: 32),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF6E5),
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: const Color(0xFFFFE0A3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const Icon(
-            Icons.info_outline_rounded,
-            size: 17,
-            color: Color(0xFFB26A00),
-          ),
-          const SizedBox(width: 9),
-          Expanded(
-            child: Text(
-              text,
-              style: const TextStyle(
-                fontSize: 13,
-                height: 1.6,
-                color: Color(0xFF8A5300),
-              ),
-            ),
-          ),
-        ],
-      ),
     );
   }
 }

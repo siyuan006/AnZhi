@@ -8,6 +8,7 @@ import '../services/api_client.dart';
 import '../services/favorite_api.dart';
 import '../services/knowledge_api.dart';
 import '../widgets/async_status.dart';
+import '../widgets/notice_card.dart';
 import '../widgets/risk_badge.dart';
 import 'login_page.dart';
 
@@ -419,9 +420,12 @@ class _Content extends StatelessWidget {
   Widget build(BuildContext context) {
     // 正文为空时如实说明，而不是渲染一片空白让人以为没加载出来
     if (text.isEmpty) {
-      return const Text(
+      return Text(
         '这条内容暂时没有正文。',
-        style: TextStyle(fontSize: 14, color: Color(0xFF9AA4B2)),
+        style: TextStyle(
+          fontSize: 14,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
       );
     }
 
@@ -472,36 +476,9 @@ class _Disclaimer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: const Color(0xFFFFF6E5),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: const Color(0xFFFFE0A3)),
-      ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          const Icon(
-            Icons.info_outline_rounded,
-            size: 16,
-            color: Color(0xFFB26A00),
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              '以上内容仅供参考。遇到紧急危险，请立即拨打 '
-              '119 / 120 / 110，不要因为查资料而延误处置。',
-              style: const TextStyle(
-                fontSize: 12,
-                height: 1.6,
-                color: Color(0xFF8A5300),
-              ),
-            ),
-          ),
-        ],
-      ),
+    return const NoticeCard(
+      text: '以上内容仅供参考。遇到紧急危险，请立即拨打 '
+          '119 / 120 / 110，不要因为查资料而延误处置。',
     );
   }
 }
