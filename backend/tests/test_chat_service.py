@@ -13,9 +13,10 @@ import httpx
 import pytest
 
 from app.schemas.chat import ChatResponse
-from app.services.ai.chat_service import DEFAULT_WARNING, ChatService
+from app.services.ai.chat_service import ChatService
 from app.services.ai.deepseek_client import DeepSeekClient
 from app.services.ai.errors import AIFailure, AIServiceError
+from app.services.ai.safety_guard import EMERGENCY_NOTICE
 
 
 def _service_returning(payload: dict | str) -> tuple[ChatService, dict]:
@@ -112,12 +113,12 @@ class TestWarningGuarantee:
     @pytest.mark.parametrize("level", ["medium", "high"])
     def test_missing_warning_is_filled(self, level: str) -> None:
         service, _ = _service_returning({"answer": "x", "risk_level": level})
-        assert _ask(service).warning == DEFAULT_WARNING
+        assert _ask(service).warning == EMERGENCY_NOTICE
 
     @pytest.mark.parametrize("level", ["medium", "high"])
     def test_blank_warning_is_filled(self, level: str) -> None:
         service, _ = _service_returning({"answer": "x", "risk_level": level, "warning": "  "})
-        assert _ask(service).warning == DEFAULT_WARNING
+        assert _ask(service).warning == EMERGENCY_NOTICE
 
     def test_model_warning_is_kept_when_present(self) -> None:
         service, _ = _service_returning(
@@ -126,14 +127,20 @@ class TestWarningGuarantee:
         assert _ask(service).warning == "不要返回火场。"
 
     def test_low_risk_does_not_get_a_warning(self) -> None:
-        """低风险也弹警告会让警告失去意义。"""
-        service, _ = _service_returning({"answer": "x", "risk_level": "low"})
-        assert _ask(service).warning is None
+        """低风险也弹警告会让警告失去意义。
 
-    def test_default_warning_points_to_emergency_services(self) -> None:
+        这里刻意用一个不含任何风险关键词的问题：
+        只要问题里出现「着火」「触电」这类词，SafetyGuard 就会把等级抬到
+        medium 并补上警告（见 test_safety_guard.py）—— 那是它的职责，
+        不是本用例要验证的东西。
+        """
+        service, _ = _service_returning({"answer": "x", "risk_level": "low"})
+        assert _ask(service, "安全出口标识是什么颜色").warning is None
+
+    def test_emergency_notice_points_to_emergency_services(self) -> None:
         # 兜底提示必须给出可执行的求助方式，而不是一句空话
         for keyword in ("119", "120", "110"):
-            assert keyword in DEFAULT_WARNING
+            assert keyword in EMERGENCY_NOTICE
 
 
 class TestHistory:

@@ -1,19 +1,19 @@
 """AI 问答编排。
 
-流程（PROJECT_SPEC 第三十六节）：
+流程（PROJECT_SPEC 第三十六、三十七节）：
 
-    用户问题 → ChatService → DeepSeek → 结构化回答
+    用户问题 → ChatService → DeepSeek → 规范化 → SafetyGuard → 结构化回答
 
 本文件负责三件事：
     1. 校验并规范化模型返回的内容（模型不保证听话）
-    2. 保证高风险回答一定带警告（第九阶段的 SafetyGuard 会做得更彻底）
+    2. 把规范化后的回答交给 [SafetyGuard] 做安全审查
     3. 把上游的失败翻译成对用户有意义的说明
 
-**阶段边界：** 本阶段只做「结构性规范化」——
-字段缺失、类型不对、风险等级不认识这类问题。
-真正的安全审查（危险操作、诱导性内容、是否需要警告）属于
-PROJECT_SPEC 第三十七节「AI 安全控制」，在阶段 9 由 SafetyGuard 完成。
-在那之前，本模块不会对外声称「回答已通过安全审查」。
+**边界划分：** 规范化解决的是「模型返回的东西能不能用」——
+字段缺失、类型不对、风险等级不认识。
+安全审查解决的是「这条回答能不能给用户看」——
+危险操作、缺警告、风险等级判低了。
+后者全部在 [safety_guard] 里，本模块只负责在正确的时机调用它。
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ import logging
 from app.schemas.chat import ChatResponse
 from app.services.ai.deepseek_client import DeepSeekClient
 from app.services.ai.errors import AIFailure, AIServiceError
+from app.services.ai.safety_guard import SafetyGuard
 
 logger = logging.getLogger("anzhi")
 
@@ -34,14 +35,6 @@ VALID_RISK_LEVELS = ("low", "medium", "high")
 # 两种误判的代价不对称，因此往谨慎的一侧靠。
 FALLBACK_RISK_LEVEL = "medium"
 
-# 中高风险回答缺少 warning 时补上的通用提示。
-# 这是一句恒为真的安全常识，不是编造的具体建议 ——
-# 编造「请用湿毛巾捂住口鼻」这种具体操作才是危险的。
-DEFAULT_WARNING = (
-    "以上内容仅供参考。若情况紧急或已有人受伤，"
-    "请立即拨打 119（火警）/ 120（急救）/ 110（报警），并听从专业人员指挥。"
-)
-
 # 分类字段的长度上限。模型偶尔会返回一整句话，这里只做形状校验，
 # **不校验分类名是否在六大分类内** —— 那需要在后端再存一份分类表，
 # 而分类名已经在数据库种子、接口、前端常量三处存在，
@@ -52,8 +45,13 @@ MAX_CATEGORY_LENGTH = 20
 class ChatService:
     """问答业务逻辑。"""
 
-    def __init__(self, client: DeepSeekClient | None = None) -> None:
+    def __init__(
+        self,
+        client: DeepSeekClient | None = None,
+        guard: SafetyGuard | None = None,
+    ) -> None:
         self._client = client or DeepSeekClient()
+        self._guard = guard or SafetyGuard()
 
     @property
     def is_configured(self) -> bool:
@@ -95,19 +93,26 @@ class ChatService:
                 "AI 没有给出有效回答，请重新提问",
             )
 
-        risk_level = self._normalize_risk(raw.get("risk_level"))
-        warning = self._text(raw.get("warning"))
-        if risk_level in ("medium", "high") and not warning:
-            warning = DEFAULT_WARNING
+        # 先规范化，再审查。顺序不能颠倒：
+        # 审查层假定拿到的是干净数据（字段类型正确、风险等级可识别），
+        # 让它同时承担类型兜底，规则会变得难以读、难以测。
+        guarded = self._guard.review(
+            question=question,
+            answer=answer.strip(),
+            steps=self._string_list(raw.get("steps")),
+            sources=self._string_list(raw.get("sources")),
+            warning=self._text(raw.get("warning")),
+            risk_level=self._normalize_risk(raw.get("risk_level")),
+        )
 
         return ChatResponse(
             question=question,
             category=self._normalize_category(raw.get("category")),
-            risk_level=risk_level,
-            answer=answer.strip(),
-            steps=self._string_list(raw.get("steps")),
-            sources=self._string_list(raw.get("sources")),
-            warning=warning,
+            risk_level=guarded.risk_level,
+            answer=guarded.answer,
+            steps=guarded.steps,
+            sources=guarded.sources,
+            warning=guarded.warning,
         )
 
     @staticmethod
