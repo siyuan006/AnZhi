@@ -1,6 +1,7 @@
 import 'package:anzhi/core/app_constants.dart';
 import 'package:anzhi/models/ai_answer.dart';
 import 'package:anzhi/models/auth_user.dart';
+import 'package:anzhi/models/comment_item.dart';
 import 'package:anzhi/models/favorite_item.dart';
 import 'package:anzhi/models/history_item.dart';
 import 'package:anzhi/models/knowledge_item.dart';
@@ -115,6 +116,18 @@ void main() {
   );
   final PostApi posts = PostApi(client: postsClient);
 
+  /// 带登录身份的社区接口，只用于发评论。
+  ///
+  /// 读评论用上面那个匿名的就行（公开内容），写必须带 token ——
+  /// 与收藏 / 历史两组一样，这里也依赖「认证」组先把 `authToken` 填上。
+  final PostApi authedPosts = PostApi(
+    client: ApiClient(
+      baseUrl: baseUrl,
+      timeout: const Duration(seconds: 5),
+      token: () => authToken,
+    ),
+  );
+
   /// 本次运行创建的账号名。
   ///
   /// **这些用例会在真实数据库里创建用户。** 名字带固定前缀便于事后清理，
@@ -132,6 +145,7 @@ void main() {
     authedApi.dispose();
     history.dispose();
     posts.dispose();
+    authedPosts.dispose();
   });
 
   group(
@@ -905,10 +919,121 @@ void main() {
 
       test('按分类与关键词筛选不发 500', () async {
         // 只验「服务端接得住这两个参数」。具体筛出什么取决于库里有什么，
-        // 拿它断言等于把测试绑死在当前数据上。
+        // 拿它断言绑定在当前数据上，等于每次改数据都要改测试。
         await posts.fetchPosts(categoryId: 1);
         await posts.fetchPosts(keyword: '安全');
         await posts.fetchPosts(categoryId: 1, keyword: '安全');
+      });
+
+      test('未登录发评论是 401 与「请先登录」', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        await expectLater(
+          posts.postComment(id, '匿名发言'),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                .having((ApiException e) => e.message, 'message', '请先登录'),
+          ),
+        );
+      });
+
+      test('未登录也能读评论', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final PagedResult<CommentItem> page = await posts.fetchComments(id);
+
+        expect(page.total, greaterThanOrEqualTo(0));
+      });
+
+      test('评论字段名与客户端解析的一致，且不带 username', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final Object? body = await postsClient.getJson('/api/posts/$id/comments');
+        final Map<String, dynamic> envelope = body as Map<String, dynamic>;
+
+        for (final String key in <String>['total', 'page', 'page_size', 'items']) {
+          expect(envelope.containsKey(key), isTrue, reason: '分页信封缺了 $key');
+        }
+
+        final List<dynamic> items = envelope['items'] as List<dynamic>;
+        if (items.isEmpty) {
+          markTestSkipped('这条帖子还没有评论，评论字段未验证');
+          return;
+        }
+        final Map<String, dynamic> item = items.first as Map<String, dynamic>;
+
+        for (final String key in <String>['id', 'content', 'author', 'created_at']) {
+          expect(item.containsKey(key), isTrue, reason: '评论条目缺了 $key，字段名可能已漂移');
+        }
+        expect(hasKey(envelope, 'username'), isFalse, reason: '评论里出现了 username');
+      });
+
+      test('发一条评论：能读回来，帖子的评论数跟着涨', () async {
+        // ⚠️ **这条会往真实数据库里写一行。** 评论没有删除接口（V1 不做），
+        // 因此它会留在库里。跑完联调后按 README「清理联调数据」一节处理。
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final PostItem before = await posts.fetchPostDetail(id);
+        final int beforeCount = before.commentCount;
+
+        final CommentItem created =
+            await authedPosts.postComment(id, '联调测试留下的评论');
+
+        expect(created.content, '联调测试留下的评论');
+        expect(created.authorName, isNotEmpty);
+
+        final PagedResult<CommentItem> page = await posts.fetchComments(id, pageSize: 100);
+        expect(
+          page.items.any((CommentItem c) => c.id == created.id),
+          isTrue,
+          reason: '刚发的评论没出现在列表里',
+        );
+
+        final PostItem after = await posts.fetchPostDetail(id);
+        expect(
+          after.commentCount,
+          beforeCount + 1,
+          reason: '评论数是列表上显示给用户的数字，不能不动',
+        );
+      });
+
+      test('评论的 created_at 按 UTC 解释', () async {
+        final int? id = await firstPostId();
+        if (id == null) return;
+
+        final PagedResult<CommentItem> page = await posts.fetchComments(id);
+        if (page.items.isEmpty) {
+          markTestSkipped('这条帖子还没有评论，时间未验证');
+          return;
+        }
+
+        DateTime? newest;
+        for (final CommentItem item in page.items) {
+          if (newest == null || item.createdAt!.isAfter(newest)) {
+            newest = item.createdAt;
+          }
+        }
+
+        expect(
+          DateTime.now().difference(newest!).inMinutes.abs(),
+          lessThan(60 * 24 * 365),
+          reason: '解析成了 1970 年之类，说明时间格式对不上',
+        );
+      });
+
+      test('往不存在的帖子发评论是 404', () async {
+        await expectLater(
+          authedPosts.postComment(999999, '你好'),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 404),
+          ),
+        );
       });
     },
     skip: enabled

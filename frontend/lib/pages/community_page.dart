@@ -120,7 +120,11 @@ class _CommunityPageState extends State<CommunityPage> {
   Future<void> _openDetail(PostItem post) async {
     await Navigator.of(context).push<void>(
       MaterialPageRoute<void>(
-        builder: (_) => PostDetailPage(postId: post.id, preview: post),
+        builder: (_) => PostDetailPage(
+          postId: post.id,
+          preview: post,
+          api: _api,
+        ),
       ),
     );
     // 回来时刷新：点赞数和评论数可能已经变了

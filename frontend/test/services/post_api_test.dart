@@ -1,3 +1,4 @@
+import 'package:anzhi/models/comment_item.dart';
 import 'package:anzhi/models/paged_result.dart';
 import 'package:anzhi/models/post_item.dart';
 import 'package:anzhi/services/api_client.dart';
@@ -129,6 +130,104 @@ void main() {
 
     expect(page.total, 0);
     expect(page.items, isEmpty);
+  });
+
+  group('评论', () {
+    PostApi loggedIn() => backend.postApi(token: () => 'fake-token');
+
+    test('能读出评论列表', () async {
+      final PagedResult<CommentItem> page = await api.fetchComments(1);
+
+      expect(page.total, 1);
+      expect(page.items.single.content, contains('充电器'));
+      expect(page.items.single.authorName, '小周');
+    });
+
+    test('没有评论的帖子是空列表而不是报错', () async {
+      final PagedResult<CommentItem> page = await api.fetchComments(2);
+
+      expect(page.total, 0);
+      expect(page.items, isEmpty);
+    });
+
+    test('评论作者只有署名，没有 username', () async {
+      final CommentItem comment = (await api.fetchComments(1)).items.single;
+
+      expect(comment.author, isNotNull);
+      expect(comment.author!.initial, '小');
+    });
+
+    test('created_at 是 naive UTC，解析后不会偏几个小时', () async {
+      final CommentItem comment = (await api.fetchComments(1)).items.single;
+
+      expect(comment.createdAt, isNotNull);
+      expect(comment.createdAt!.toUtc().hour, 11);
+    });
+
+    test('未登录发评论抛出可读的 401', () async {
+      // 假后端只看有没有 Authorization 头，与服务端一致
+      await expectLater(
+        api.postComment(1, '路过'),
+        throwsA(
+          isA<ApiException>()
+              .having((ApiException e) => e.statusCode, 'statusCode', 401)
+              .having((ApiException e) => e.message, 'message', '请先登录'),
+        ),
+      );
+    });
+
+    test('登录后能发评论，返回的是自己的署名', () async {
+      final CommentItem created = await loggedIn().postComment(1, '补一句');
+
+      expect(created.content, '补一句');
+      expect(created.authorName, '我');
+    });
+
+    test('发完之后列表里就有了', () async {
+      final PostApi client = loggedIn();
+      await client.postComment(1, '新评论');
+
+      final PagedResult<CommentItem> page = await client.fetchComments(1);
+
+      expect(page.total, 2);
+      expect(page.items.last.content, '新评论');
+    });
+
+    test('评论按时间正序，最新的在最后', () async {
+      backend.seedComment(1, content: '更晚的一条', createdAt: '2026-09-30T13:00:00');
+
+      final List<String> contents = (await api.fetchComments(1))
+          .items
+          .map((CommentItem c) => c.content)
+          .toList();
+
+      expect(contents.length, 2);
+      expect(contents.first, contains('充电器'));
+      expect(contents.last, '更晚的一条');
+    });
+
+    test('帖子不存在时读评论是 404', () async {
+      await expectLater(
+        api.fetchComments(999999),
+        throwsA(
+          isA<ApiException>()
+              .having((ApiException e) => e.statusCode, 'statusCode', 404)
+              .having((ApiException e) => e.message, 'message', '帖子不存在或已删除'),
+        ),
+      );
+    });
+
+    test('往不存在的帖子发评论也是 404，而不是 401', () async {
+      // 先判帖子在不在，再判有没有登录：帖子都没了，
+      // 「请先登录」是一句误导
+      await expectLater(
+        loggedIn().postComment(999999, '你好'),
+        throwsA(
+          isA<ApiException>()
+              .having((ApiException e) => e.statusCode, 'statusCode', 404),
+        ),
+      );
+    });
   });
 
   group('响应体缺字段时', () {

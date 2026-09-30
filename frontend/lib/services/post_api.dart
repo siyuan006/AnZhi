@@ -1,23 +1,28 @@
+import '../models/comment_item.dart';
 import '../models/paged_result.dart';
 import '../models/post_item.dart';
 import 'api_client.dart';
 
 /// 安知 —— 社区接口
 ///
-/// 对应 `docs/API.md` 第 7 节。阶段 12a 只有两个**读**接口：
-///   - `GET /api/posts`        帖子列表
-///   - `GET /api/posts/{id}`   帖子详情
+/// 对应 `docs/API.md` 第 7 节。
 ///
-/// 评论（12b）、点赞（12c）、发帖（12d）在后续补上。
+/// 读（列表、详情、评论列表）不需要登录，写（发表评论）需要。
+/// 两件事共用一个客户端：未登录时 `AuthController` 的 token 回调返回
+/// `null`，请求就不带 Authorization 头，读照样能用；登录之后写才成立。
+/// 因此**生产路径上必须传入 `AuthController.apiClient`** ——
+/// 传一个匿名客户端的话，读没问题，发评论会拿到 401，
+/// 而现象看起来完全像是后端的毛病。
 ///
-/// **两个接口都不需要登录**，因此这里用的是匿名 `ApiClient` ——
-/// 社区内容是公开的，浏览它没有理由要求身份（docs/API.md 第 11 节）。
-/// 这与 `FavoriteApi` / `HistoryApi` 不同：那两个是「这份数据属于谁」
-/// 的接口，必须带着 token。
+/// 点赞（12c）、发帖（12d）在后续补上。
 class PostApi {
-  PostApi({ApiClient? client}) : _client = client ?? ApiClient();
+  PostApi({ApiClient? client})
+      : _client = client ?? ApiClient(),
+        _ownsClient = client == null;
 
   final ApiClient _client;
+
+  final bool _ownsClient;
 
   /// 拉取帖子列表。
   ///
@@ -60,5 +65,37 @@ class PostApi {
     return PostItem.fromJson(json);
   }
 
-  void dispose() => _client.close();
+  /// 拉取某条帖子的评论，按时间正序 —— 与帖子列表相反。
+  Future<PagedResult<CommentItem>> fetchComments(
+    int postId, {
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final Object? json = await _client.getJson(
+      '/api/posts/$postId/comments',
+      query: <String, dynamic>{'page': page, 'page_size': pageSize},
+    );
+
+    if (json is! Map<String, dynamic>) {
+      throw const ApiException('评论列表返回格式不正确');
+    }
+    return PagedResult<CommentItem>.fromJson(json, CommentItem.fromJson);
+  }
+
+  /// 发表评论。需要登录，未登录时服务端返回 401「请先登录」。
+  Future<CommentItem> postComment(int postId, String content) async {
+    final Object? json = await _client.postJson(
+      '/api/posts/$postId/comments',
+      <String, dynamic>{'content': content},
+    );
+
+    if (json is! Map<String, dynamic>) {
+      throw const ApiException('发表评论返回格式不正确');
+    }
+    return CommentItem.fromJson(json);
+  }
+
+  void dispose() {
+    if (_ownsClient) _client.close();
+  }
 }

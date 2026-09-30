@@ -201,13 +201,17 @@ class FakeBackend {
         ),
       );
 
-  /// 社区接口。**不需要 token** —— 帖子是公开内容，
-  /// 与收藏 / 历史那两个「这份数据属于谁」的接口不同。
-  PostApi postApi({Duration? timeout}) => PostApi(
+  /// 社区接口。
+  ///
+  /// 读不需要 token（帖子是公开内容），发评论需要 ——
+  /// 所以 `token` 是可选的：不传就是「未登录」，发评论会拿到 401，
+  /// 与服务端的行为一致。
+  PostApi postApi({Duration? timeout, String? Function()? token}) => PostApi(
         client: ApiClient(
           httpClient: httpClient,
           baseUrl: 'http://test.local',
           timeout: timeout,
+          token: token,
         ),
       );
 
@@ -374,13 +378,15 @@ class FakeBackend {
       return _json(_postPage(request.url.queryParameters), 200);
     }
 
-    final int? id = int.tryParse(path.substring('/api/posts/'.length));
-    final Map<String, dynamic>? post = id == null
-        ? null
-        : posts.cast<Map<String, dynamic>?>().firstWhere(
-              (Map<String, dynamic>? p) => p!['id'] == id,
-              orElse: () => null,
-            );
+    final String rest = path.substring('/api/posts/'.length);
+    if (rest.endsWith('/comments')) {
+      final int? postId =
+          int.tryParse(rest.substring(0, rest.length - '/comments'.length));
+      return _handleComments(request, postId);
+    }
+
+    final int? id = int.tryParse(rest);
+    final Map<String, dynamic>? post = _findPost(id);
 
     if (post == null) {
       return _json(<String, dynamic>{'detail': '帖子不存在或已删除'}, 404);
@@ -390,6 +396,128 @@ class FakeBackend {
       return _json(<String, dynamic>{}, 204);
     }
     return _json(post, 200);
+  }
+
+  Map<String, dynamic>? _findPost(int? id) => id == null
+      ? null
+      : posts.cast<Map<String, dynamic>?>().firstWhere(
+            (Map<String, dynamic>? p) => p!['id'] == id,
+            orElse: () => null,
+          );
+
+  /// 评论按帖子 id 分组。
+  ///
+  /// 默认只给第一条帖子配评论：第一条覆盖「有评论」，
+  /// 第二条覆盖「还没有人评论」—— 两种状态都要能测到。
+  Map<int, List<Map<String, dynamic>>> comments =
+      <int, List<Map<String, dynamic>>>{
+    1: <Map<String, dynamic>>[
+      <String, dynamic>{
+        'id': 1,
+        'content': '补充一点：充电器长期插着也会发热。',
+        'author': <String, dynamic>{'id': 3, 'name': '小周'},
+        'created_at': '2026-09-30T11:00:00',
+      },
+    ],
+  };
+
+  void seedNoComments() => comments = <int, List<Map<String, dynamic>>>{};
+
+  /// 强制**读评论**走错误分支（例如 500）。
+  ///
+  /// 只影响评论，不影响帖子本身 —— 这样才测得出「评论这一块挂了，
+  /// 正文照常可读」。
+  int? commentReadStatus;
+
+  String? commentReadError;
+
+  /// 强制**发评论**走错误分支。为 `null` 时按是否带 token 判断能否发表。
+  int? commentPostStatus;
+
+  String? commentPostError;
+
+  /// 发出去的评论署名。
+  String currentUserName = '我';
+
+  /// 直接造一条评论，返回它的 id。
+  int seedComment(
+    int postId, {
+    required String content,
+    String author = '小周',
+    String createdAt = '2026-09-30T11:00:00',
+  }) {
+    final List<Map<String, dynamic>> list =
+        comments[postId] ?? <Map<String, dynamic>>[];
+    final int id = list.length + 1;
+    comments[postId] = <Map<String, dynamic>>[
+      ...list,
+      <String, dynamic>{
+        'id': id,
+        'content': content,
+        'author': <String, dynamic>{'id': 3, 'name': author},
+        'created_at': createdAt,
+      },
+    ];
+    return id;
+  }
+
+  Future<http.Response> _handleComments(
+    http.Request request,
+    int? postId,
+  ) async {
+    final int? id = postId;
+    if (id == null || _findPost(id) == null) {
+      return _json(<String, dynamic>{'detail': '帖子不存在或已删除'}, 404);
+    }
+
+    final List<Map<String, dynamic>> list =
+        comments[id] ?? <Map<String, dynamic>>[];
+
+    if (request.method == 'POST') {
+      if (commentPostStatus != null) {
+        return _json(
+          <String, dynamic>{'detail': commentPostError ?? '评论发表失败'},
+          commentPostStatus!,
+        );
+      }
+      // 与服务端一致：没有 Authorization 头就是未登录
+      if (request.headers['Authorization'] == null) {
+        return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+      }
+
+      final Map<String, dynamic> body =
+          jsonDecode(utf8.decode(request.bodyBytes)) as Map<String, dynamic>;
+      final Map<String, dynamic> created = <String, dynamic>{
+        'id': list.length + 1,
+        'content': '${body['content']}'.trim(),
+        'author': <String, dynamic>{'id': 4, 'name': currentUserName},
+        'created_at': '2026-09-30T12:30:00',
+      };
+      comments[id] = <Map<String, dynamic>>[...list, created];
+      return _json(created, 201);
+    }
+
+    if (commentReadStatus != null) {
+      return _json(
+        <String, dynamic>{'detail': commentReadError ?? '评论加载失败'},
+        commentReadStatus!,
+      );
+    }
+
+    final int page = int.tryParse(request.url.queryParameters['page'] ?? '1') ?? 1;
+    final int size =
+        int.tryParse(request.url.queryParameters['page_size'] ?? '20') ?? 20;
+    final int start = (page - 1) * size;
+    final List<Map<String, dynamic>> slice = start >= list.length
+        ? const <Map<String, dynamic>>[]
+        : list.sublist(start, (start + size).clamp(0, list.length));
+
+    return _json(<String, dynamic>{
+      'total': list.length,
+      'page': page,
+      'page_size': size,
+      'items': slice,
+    }, 200);
   }
 
   Map<String, dynamic> _userJson(String username) => <String, dynamic>{

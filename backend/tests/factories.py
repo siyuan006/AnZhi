@@ -92,6 +92,19 @@ def create_post(db: Session, **overrides: object) -> Post:
     return item
 
 
+def create_comment(db: Session, **overrides: object) -> Comment:
+    """构造并**立即落库**一条评论，返回该对象。
+
+    不会同步 `posts.comment_count` —— 那个计数由
+    `comment_service.create_comment` 维护。直接用它造数据时
+    想验计数，要自己把帖子的计数改对。
+    """
+    item = make_comment(**overrides)
+    db.add(item)
+    db.commit()
+    return item
+
+
 def create_knowledge(db: Session, **overrides: object) -> Knowledge:
     """构造并**立即落库**一篇知识卡片，返回该对象。
 

@@ -5,9 +5,10 @@ from __future__ import annotations
 from datetime import datetime
 
 from sqlalchemy import DateTime, ForeignKey, Index, Integer, Text
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base, utcnow
+from app.models.user import User
 
 
 class Comment(Base):
@@ -35,6 +36,12 @@ class Comment(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, default=utcnow
     )
+
+    author: Mapped["User"] = relationship(lazy="joined")
+
+    @property
+    def author_name(self) -> str:
+        return self.author.nickname or self.author.username
 
     def __repr__(self) -> str:
         return f"<Comment id={self.id} post={self.post_id}>"

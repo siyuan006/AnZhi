@@ -5,6 +5,7 @@ import 'core/app_theme.dart';
 import 'core/auth_controller.dart';
 import 'services/chat_api.dart';
 import 'services/knowledge_api.dart';
+import 'services/post_api.dart';
 import 'widgets/main_scaffold.dart';
 
 /// 安知 —— 应用根组件
@@ -37,6 +38,11 @@ class _AnZhiAppState extends State<AnZhiApp> {
   late final AuthController _auth = widget.authController ?? AuthController();
   late final bool _ownsAuth = widget.authController == null;
 
+  /// 社区接口。**必须接 `_auth.apiClient` 而不是留空** ——
+  /// 留空会造一个匿名客户端，读没问题，发评论只会拿到 401
+  /// 「请先登录」，而现象看起来完全像是后端的毛病。
+  late final PostApi _postApi = PostApi(client: _auth.apiClient);
+
   @override
   void initState() {
     super.initState();
@@ -47,6 +53,7 @@ class _AnZhiAppState extends State<AnZhiApp> {
 
   @override
   void dispose() {
+    _postApi.dispose();
     if (_ownsAuth) _auth.dispose();
     super.dispose();
   }
@@ -65,6 +72,7 @@ class _AnZhiAppState extends State<AnZhiApp> {
         home: MainScaffold(
           knowledgeApi: widget.knowledgeApi,
           chatApi: widget.chatApi,
+          postApi: _postApi,
         ),
       ),
     );

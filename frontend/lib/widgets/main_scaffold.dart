@@ -7,6 +7,7 @@ import '../pages/knowledge_page.dart';
 import '../pages/profile_page.dart';
 import '../services/chat_api.dart';
 import '../services/knowledge_api.dart';
+import '../services/post_api.dart';
 
 /// 安知 —— 主框架
 ///
@@ -16,7 +17,12 @@ import '../services/knowledge_api.dart';
 /// 使用 [IndexedStack] 保留各页面状态，切换标签时不会重建页面、
 /// 也不会丢失滚动位置。
 class MainScaffold extends StatefulWidget {
-  const MainScaffold({super.key, this.knowledgeApi, this.chatApi});
+  const MainScaffold({
+    super.key,
+    this.knowledgeApi,
+    this.chatApi,
+    this.postApi,
+  });
 
   /// 知识接口。为 `null` 时由各页面自行创建（生产路径）；
   /// 测试注入假实现后，无需后端即可驱动整套页面。
@@ -24,6 +30,10 @@ class MainScaffold extends StatefulWidget {
 
   /// AI 问答接口。为 `null` 时由 AI 页自行创建（生产路径）。
   final ChatApi? chatApi;
+
+  /// 社区接口。读匿名、写带鉴权，因此这个实例必须由
+  /// `AuthController` 那一侧构造好再传进来 —— 见 `app.dart`。
+  final PostApi? postApi;
 
   @override
   State<MainScaffold> createState() => _MainScaffoldState();
@@ -79,7 +89,7 @@ class _MainScaffoldState extends State<MainScaffold> {
           ),
           AiPage(api: widget.chatApi),
           KnowledgePage(api: widget.knowledgeApi),
-          const CommunityPage(),
+          CommunityPage(api: widget.postApi),
           const ProfilePage(),
         ],
       ),
