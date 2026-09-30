@@ -41,7 +41,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         logger.info("DeepSeek 已配置：model=%s", settings.deepseek_model)
     else:
         logger.warning(
-            "未检测到 DEEPSEEK_API_KEY，AI 问答接口在第八阶段接入前不可用"
+            "未检测到 DEEPSEEK_API_KEY，POST /api/chat 将返回 503 —— "
+            "问答链路代码已就绪，缺的只是一把真实的 Key"
             "（复制 backend/.env.example 为 backend/.env 并填写）"
         )
     yield
