@@ -10,9 +10,10 @@ import '../models/post_item.dart';
 import '../services/api_client.dart';
 import '../services/post_api.dart';
 import '../widgets/async_status.dart';
+import 'post_compose_page.dart';
 import 'post_detail_page.dart';
 
-/// 安知 —— 社区页（阶段 12a 列表，12c 点赞，PROJECT_SPEC 第二十、四十一节）
+/// 安知 —— 社区页（阶段 12a 列表，12c 点赞，12d 发帖，PROJECT_SPEC 第二十、四十一节）
 ///
 /// V1.0 保持轻量：帖子列表 · 帖子详情 · 发布帖子 · 评论 · 点赞。
 /// 暂不实现：私信、关注用户、复杂推荐、AI 审核。
@@ -21,7 +22,7 @@ import 'post_detail_page.dart';
 /// 带上 token 时每一项会多一个 `is_liked`，爱心因此能如实反映
 /// 「我点过没有」—— 而不是所有人看到的都是空心。
 ///
-/// 发帖按钮与搜索如实标注后续阶段 —— 做成「点了没反应」比标出来更糟。
+/// 搜索按钮如实标注后续版本 —— 做成「点了没反应」比标出来更糟。
 class CommunityPage extends StatefulWidget {
   const CommunityPage({super.key, this.api});
 
@@ -170,6 +171,29 @@ class _CommunityPageState extends State<CommunityPage> {
     }
   }
 
+  /// 打开发帖页。
+  ///
+  /// 把当前这个 `_api` 传下去，而不是让它自己造一个 ——
+  /// 本页的 `_api` 是带 token 的那个（`app.dart` 里用
+  /// `AuthController.apiClient` 建的），发帖要用得上。
+  ///
+  /// 发成功了才刷新：用户按返回键放弃时不必多打一次请求。
+  Future<void> _openCompose() async {
+    final AuthController? auth = AuthScope.maybeOf(context);
+    if (auth == null || !auth.isLoggedIn) {
+      _toast('登录后可以发帖');
+      return;
+    }
+
+    final PostItem? created = await Navigator.of(context).push<PostItem>(
+      MaterialPageRoute<PostItem>(
+        builder: (_) => PostComposePage(api: _api),
+      ),
+    );
+    if (!mounted) return;
+    if (created != null) await _load(showLoading: false);
+  }
+
   /// 功能未实现的统一提示。
   /// 明确告知所处阶段，避免用户以为功能已可用但没有响应。
   void _notYet(String feature, String stage) {
@@ -191,7 +215,7 @@ class _CommunityPageState extends State<CommunityPage> {
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _notYet('发布帖子', '阶段 12d'),
+        onPressed: _openCompose,
         icon: const Icon(Icons.edit_outlined, size: 19),
         label: const Text('发帖'),
       ),

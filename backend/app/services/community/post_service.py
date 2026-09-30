@@ -29,7 +29,35 @@ _PUBLISHED_FILTER = Post.is_published.is_(True)
 #: 将来界面想多显示一行也不必改后端。
 SUMMARY_LENGTH = 120
 
+#: 标题与正文的长度限制。
+#:
+#: 标题上限与数据库列宽（`String(200)`）一致 —— 不一致的话，
+#: 校验放过的文本会在写库时被截断或报错。
+#: 正文给 5000 字：科普分享够用，又不至于让一次请求搬太多东西。
+TITLE_MIN_LENGTH = 1
+TITLE_MAX_LENGTH = 200
+CONTENT_MIN_LENGTH = 1
+CONTENT_MAX_LENGTH = 5000
+
 _WHITESPACE = re.compile(r"\s+")
+
+
+def normalize_title(title: str) -> str:
+    """标题压成一行：折叠所有空白，再去首尾。
+
+    标题必须是单行 —— 带换行的标题在卡片上会把布局撑破，
+    而在列表页里用户根本看不出自己多打了一个回车。
+    """
+    return _WHITESPACE.sub(" ", title).strip()
+
+
+def normalize_content(content: str) -> str:
+    """正文只做首尾去空白，并把换行统一成 `\\n`。
+
+    **不折叠内部的换行**：正文分段是用户有意写的，
+    折叠掉等于把人家排好的版抹平。
+    """
+    return content.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 def make_summary(content: str) -> str:
@@ -47,13 +75,21 @@ def make_summary(content: str) -> str:
 def _filters(
     category_id: int | None,
     keyword: str | None,
+    author_id: int | None = None,
 ) -> list[ColumnElement[bool]]:
     """构造筛选条件。
 
     列表查询与计数查询**共用**这一份条件，否则很容易出现
     「总数说有 30 条、列表只返回 5 条」这种前后端对不上的问题。
+
+    「我的帖子」不是另写一条查询，只是多一个 `author_id` 条件 ——
+    两处各写一遍的话，将来给列表加过滤（例如屏蔽词）时
+    很容易只改了一处。
     """
     conditions: list[ColumnElement[bool]] = [_PUBLISHED_FILTER]
+
+    if author_id is not None:
+        conditions.append(Post.user_id == author_id)
 
     if category_id is not None:
         conditions.append(Post.category_id == category_id)
@@ -72,9 +108,10 @@ def count_posts(
     *,
     category_id: int | None = None,
     keyword: str | None = None,
+    author_id: int | None = None,
 ) -> int:
     """符合条件的帖子总数。"""
-    conditions = _filters(category_id, keyword)
+    conditions = _filters(category_id, keyword, author_id)
     total = db.scalar(select(func.count()).select_from(Post).where(*conditions))
     return total or 0
 
@@ -84,6 +121,7 @@ def list_posts(
     *,
     category_id: int | None = None,
     keyword: str | None = None,
+    author_id: int | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> list[Post]:
@@ -94,7 +132,7 @@ def list_posts(
     对社区来说这尤其容易发生 —— 帖子是用户随手发的，
     不像知识卡片那样有审核间隔。
     """
-    conditions = _filters(category_id, keyword)
+    conditions = _filters(category_id, keyword, author_id)
     stmt = (
         select(Post)
         .where(*conditions)
@@ -103,6 +141,46 @@ def list_posts(
         .limit(page_size)
     )
     return list(db.scalars(stmt).unique().all())
+
+
+def create_post(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    content: str,
+    category_id: int | None = None,
+) -> Post:
+    """发布一条帖子。
+
+    入库的是**规范化之后**的文本（见 `normalize_title` /
+    `normalize_content`），与校验用的是同一份值 ——
+    分开算的话，会出现「校验放过、入库的却是另一个东西」。
+    """
+    post = Post(
+        user_id=user_id,
+        title=normalize_title(title),
+        content=normalize_content(content),
+        category_id=category_id,
+    )
+    db.add(post)
+    db.commit()
+    db.refresh(post)
+    return post
+
+
+def delete_post(db: Session, post: Post) -> None:
+    """删除一条帖子。
+
+    **是软删除**：把 `is_published` 置为 False，行还在库里。
+    这样点赞与评论不会变成指向空气的外键，计数字段也仍然
+    对得上 —— 而且误删可以恢复。
+
+    删除后该帖子在列表、详情、评论、点赞四个入口一律视为
+    「不存在」，因为它们都经过 `_PUBLISHED_FILTER`。
+    """
+    post.is_published = False
+    db.commit()
 
 
 def get_post(db: Session, post_id: int) -> Post | None:

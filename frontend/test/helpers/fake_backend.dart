@@ -1,5 +1,6 @@
 import 'dart:convert';
 
+import 'package:anzhi/core/app_constants.dart';
 import 'package:anzhi/core/auth_controller.dart';
 import 'package:anzhi/services/api_client.dart';
 import 'package:anzhi/services/auth_api.dart';
@@ -303,16 +304,21 @@ class FakeBackend {
   /// 预置一条帖子，返回它的 id。
   ///
   /// 不传 `category_id` 就是「不属于任何分类」。
+  ///
+  /// [owner] 是发帖人的**用户名**（不是署名昵称）——「我的帖子」
+  /// 与删帖的权限判断都以它为准，与真实后端按 `user_id` 过滤一致。
   int seedPost({
     required String title,
     String content = '正文。',
     int? categoryId,
     String author = '小艾',
+    String owner = 'alice',
     int likeCount = 0,
     int commentCount = 0,
     String createdAt = '2026-09-30T12:00:00',
   }) {
-    final int id = posts.length + 1;
+    final int id = _nextPostId++;
+    postOwners[id] = owner;
     posts = <Map<String, dynamic>>[
       <String, dynamic>{
         'id': id,
@@ -330,8 +336,37 @@ class FakeBackend {
     return id;
   }
 
+  /// 下一个可用的帖子 id。
+  ///
+  /// **不能用 `posts.length + 1`**：帖子会被删掉，删完再发新的就会
+  /// 撞上一条已经存在的 id。真实后端的自增主键也不会回收已删的号。
+  int _nextPostId = 3;
+
+  /// 帖子 id -> 发帖人的用户名
+  final Map<int, String> postOwners = <int, String>{1: 'alice', 2: 'bob'};
+
   /// 清空帖子目录（测「还没有人发帖」用）
   void seedNoPosts() => posts = <Map<String, dynamic>>[];
+
+  /// 强制**发帖**走错误分支（例如 422 校验失败）。
+  ///
+  /// 不复用全局的 `errorStatus`：那会把帖子列表一起打挂，
+  /// 于是「发帖失败」和「页面没加载出来」在测试里长得一模一样。
+  int? postCreateStatus;
+  String postCreateError = '标题不能为空';
+
+  /// 强制**删帖**走错误分支（例如 403 只能删自己的）。
+  int? postDeleteStatus;
+  String postDeleteError = '只能删除自己的帖子';
+
+  /// 依次收到的发帖请求体。
+  ///
+  /// 服务层测试里断言过「没选分类时 `category_id` 传的是 null」，
+  /// 那只证明了 `PostApi` 的行为；页面这一层要证明的是
+  /// 「用户在界面上选的那个分类，确实一路传到了请求体里」——
+  /// 中间任何一环写死成 null，都只有在这里才看得出来。
+  final List<Map<String, dynamic>> postCreateRequests =
+      <Map<String, dynamic>>[];
 
   // --- 点赞（/api/posts/{id}/like）-----------------------------------------
 
@@ -424,7 +459,19 @@ class FakeBackend {
     final String? viewer = _usernameFromHeader(request);
 
     if (path == '/api/posts') {
+      if (request.method == 'POST') {
+        return _handlePostCreate(request, viewer);
+      }
       return _json(_postPage(request.url.queryParameters, viewer), 200);
+    }
+
+    // `/mine` 必须在下面 `int.tryParse(rest)` 之前处理 ——
+    // 真实后端那边也是一条路由顺序的硬性要求（`/mine` 要声明在
+    // `/{post_id}` 前面，否则会被当成 id 解析失败）。假后端先解析
+    // 成 int 的话，`/mine` 会变成 404，而真实后端给的是 401，
+    // 于是页面测试和线上行为对不上。
+    if (path == '/api/posts/mine') {
+      return _handleMyPosts(request, viewer);
     }
 
     final String rest = path.substring('/api/posts/'.length);
@@ -440,16 +487,132 @@ class FakeBackend {
     }
 
     final int? id = int.tryParse(rest);
+
+    if (request.method == 'DELETE') {
+      return _handlePostDelete(id, viewer);
+    }
+
     final Map<String, dynamic>? post = _findPost(id);
 
     if (post == null) {
       return _json(<String, dynamic>{'detail': '帖子不存在或已删除'}, 404);
     }
-    if (request.method == 'DELETE') {
-      posts = posts.where((Map<String, dynamic> p) => p['id'] != id).toList();
-      return _json(<String, dynamic>{}, 204);
-    }
     return _json(_postJson(post, viewer), 200);
+  }
+
+  /// 发帖。复述了后端的四个约定：
+  ///   - 未登录一律 401「请先登录」
+  ///   - 标题与正文按**去掉首尾空白之后**的文本判空（全空格算空）
+  ///   - 分类不存在时 404 而不是 500
+  ///   - 成功返回**详情结构**（含正文），状态码 201
+  Future<http.Response> _handlePostCreate(
+    http.Request request,
+    String? viewer,
+  ) async {
+    if (postCreateStatus != null) {
+      return _json(<String, dynamic>{'detail': postCreateError}, postCreateStatus!);
+    }
+    if (viewer == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    final Map<String, dynamic> body = _body(request);
+    postCreateRequests.add(body);
+    final String title = '${body['title'] ?? ''}'.trim();
+    final String content = '${body['content'] ?? ''}'.trim();
+
+    if (title.isEmpty) {
+      return _json(<String, dynamic>{'detail': '标题不能为空'}, 422);
+    }
+    if (content.isEmpty) {
+      return _json(<String, dynamic>{'detail': '正文不能为空'}, 422);
+    }
+
+    final int? categoryId = (body['category_id'] as num?)?.toInt();
+    if (categoryId != null &&
+        !kCategories.any((SafetyCategory c) => c.id == categoryId)) {
+      return _json(<String, dynamic>{'detail': '分类不存在'}, 404);
+    }
+
+    // 标题压成一行 —— 与后端 `normalize_title` 一致
+    final String normalized = title.replaceAll(RegExp(r'\s+'), ' ');
+    final String name = nicknames[viewer] ?? viewer;
+    final int id = _nextPostId++;
+    postOwners[id] = viewer;
+
+    final Map<String, dynamic> created = <String, dynamic>{
+      'id': id,
+      'title': normalized,
+      'summary': content,
+      'content': content,
+      'category_id': categoryId,
+      'author': <String, dynamic>{'id': _idFor(viewer), 'name': name},
+      'like_count': 0,
+      'comment_count': 0,
+      'created_at': '2026-09-30T12:30:00',
+    };
+    posts = <Map<String, dynamic>>[created, ...posts];
+
+    return _json(_postJson(created, viewer), 201);
+  }
+
+  /// 「我的帖子」。未登录 401；否则只返回自己发的，最新的在前。
+  Future<http.Response> _handleMyPosts(
+    http.Request request,
+    String? viewer,
+  ) async {
+    if (viewer == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    final List<Map<String, dynamic>> mine = posts
+        .where((Map<String, dynamic> p) => postOwners[p['id']] == viewer)
+        .toList(growable: false);
+
+    final Map<String, String> query = request.url.queryParameters;
+    final int page = int.tryParse(query['page'] ?? '1') ?? 1;
+    final int pageSize = int.tryParse(query['page_size'] ?? '20') ?? 20;
+    final int start = (page - 1) * pageSize;
+    final List<Map<String, dynamic>> slice = start >= mine.length
+        ? const <Map<String, dynamic>>[]
+        : mine.sublist(start, (start + pageSize).clamp(0, mine.length));
+
+    return _json(<String, dynamic>{
+      'total': mine.length,
+      'page': page,
+      'page_size': pageSize,
+      'items': slice
+          .map((Map<String, dynamic> p) => _postSummaryJson(p, viewer))
+          .toList(),
+    }, 200);
+  }
+
+  /// 删帖。复述了后端的三个约定：
+  ///   - 未登录 401
+  ///   - 删别人的 403 而不是 404（已发布的帖子人人看得见，
+  ///     假装它不存在只会让作者困惑）
+  ///   - 成功 204 且**没有响应体**
+  Future<http.Response> _handlePostDelete(int? id, String? viewer) async {
+    if (postDeleteStatus != null) {
+      return _json(<String, dynamic>{'detail': postDeleteError}, postDeleteStatus!);
+    }
+    if (viewer == null) {
+      return _json(<String, dynamic>{'detail': '请先登录'}, 401);
+    }
+
+    final Map<String, dynamic>? post = _findPost(id);
+    if (post == null) {
+      return _json(<String, dynamic>{'detail': '帖子不存在或已删除'}, 404);
+    }
+    if (postOwners[post['id']] != viewer) {
+      return _json(<String, dynamic>{'detail': '只能删除自己的帖子'}, 403);
+    }
+
+    posts = posts.where((Map<String, dynamic> p) => p['id'] != id).toList();
+    postOwners.remove(id);
+    comments.remove(id);
+
+    return http.Response('', 204);
   }
 
   /// 点赞与取消，复述了后端的三个关键约定：

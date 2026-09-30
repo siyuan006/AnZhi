@@ -2,6 +2,7 @@ import 'package:anzhi/core/auth_controller.dart';
 import 'package:anzhi/pages/favorites_page.dart';
 import 'package:anzhi/pages/history_page.dart';
 import 'package:anzhi/pages/login_page.dart';
+import 'package:anzhi/pages/my_posts_page.dart';
 import 'package:anzhi/pages/profile_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -99,6 +100,34 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.byType(HistoryPage), findsOneWidget);
+    });
+
+    testWidgets('点「我的帖子」同样打开登录页', (WidgetTester tester) async {
+      await pumpProfile(tester, FakeBackend());
+
+      await tester.tap(find.text('我的帖子'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(LoginPage), findsOneWidget);
+    });
+
+    testWidgets('登录成功后直接落在我的帖子页，不用再点一次', (WidgetTester tester) async {
+      final FakeBackend backend = FakeBackend()
+        ..seedAccount('xiaoming', 'hunter2hunter2');
+      await pumpProfile(tester, backend);
+
+      await tester.tap(find.text('我的帖子'));
+      await tester.pumpAndSettle();
+
+      await tester.enterText(find.widgetWithText(TextField, '用户名'), 'xiaoming');
+      await tester.enterText(
+        find.widgetWithText(TextField, '密码'),
+        'hunter2hunter2',
+      );
+      await tester.tap(find.widgetWithText(FilledButton, '登录'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(MyPostsPage), findsOneWidget);
     });
 
     testWidgets('从页头登录后，我的页面立刻变成已登录形态', (WidgetTester tester) async {
@@ -212,20 +241,24 @@ void main() {
   });
 
   group('尚未实现的入口', () {
-    testWidgets('社区与个性化入口如实标注阶段', (WidgetTester tester) async {
+    testWidgets('个性化入口如实标注阶段', (WidgetTester tester) async {
       await pumpProfile(tester, FakeBackend());
 
-      expect(find.text('阶段 12'), findsOneWidget);
+      expect(
+        find.text('阶段 12'),
+        findsNothing,
+        reason: '阶段 12 的入口（我的帖子）已经接通，不该再标着阶段',
+      );
       expect(find.text('阶段 13'), findsNWidgets(3));
     });
 
     testWidgets('点未实现的入口提示计划阶段', (WidgetTester tester) async {
       await pumpProfile(tester, FakeBackend());
 
-      await tester.tap(find.text('我的帖子'));
+      await tester.tap(find.text('关注领域'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('阶段 12'), findsWidgets);
+      expect(find.textContaining('阶段 13'), findsWidgets);
     });
 
     testWidgets('关于安知有实际内容', (WidgetTester tester) async {

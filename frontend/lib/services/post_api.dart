@@ -15,10 +15,8 @@ import 'api_client.dart';
 /// 传一个匿名客户端的话，读没问题，写会拿到 401，
 /// 而现象看起来完全像是后端的毛病。
 ///
-/// 读了 token 的接口（列表、详情）会多返回一个 `is_liked`：
+/// 读了 token 的接口（列表、详情、我的帖子）会多返回一个 `is_liked`：
 /// 它答的是「我点过吗」。匿名请求恒为 `false`。
-///
-/// 发帖（12d）在后续补上。
 class PostApi {
   PostApi({ApiClient? client})
       : _client = client ?? ApiClient(),
@@ -97,6 +95,56 @@ class PostApi {
       throw const ApiException('发表评论返回格式不正确');
     }
     return CommentItem.fromJson(json);
+  }
+
+  /// 我发过的帖子。需要登录，未登录时服务端返回 401「请先登录」。
+  ///
+  /// 已删除的帖子不在这里出现 —— 删除是软删除，但「删了」
+  /// 对作者自己同样意味着不可见。
+  Future<PagedResult<PostItem>> fetchMyPosts({
+    int page = 1,
+    int pageSize = 20,
+  }) async {
+    final Object? json = await _client.getJson(
+      '/api/posts/mine',
+      query: <String, dynamic>{'page': page, 'page_size': pageSize},
+    );
+
+    if (json is! Map<String, dynamic>) {
+      throw const ApiException('我的帖子返回格式不正确');
+    }
+    return PagedResult<PostItem>.fromJson(json, PostItem.fromJson);
+  }
+
+  /// 发布帖子。需要登录。
+  ///
+  /// 返回的是**详情结构**（含正文）：发完立刻跳进详情页是最自然的
+  /// 动作，少一次请求。
+  Future<PostItem> createPost({
+    required String title,
+    required String content,
+    int? categoryId,
+  }) async {
+    final Object? json = await _client.postJson('/api/posts', <String, dynamic>{
+      'title': title,
+      'content': content,
+      // 不选分类时就传 null。注意 ApiClient 只清理**查询参数**里的
+      // null，请求体是原样发出去的；服务端把 null 当作
+      // 「不属于任何分类」，与数据库里 category_id 可空一致。
+      'category_id': categoryId,
+    });
+
+    if (json is! Map<String, dynamic>) {
+      throw const ApiException('发布帖子返回格式不正确');
+    }
+    return PostItem.fromJson(json);
+  }
+
+  /// 删除自己的帖子。需要登录；删别人的会拿到 403「只能删除自己的帖子」。
+  ///
+  /// 服务端是软删除，返回 204 无响应体。
+  Future<void> deletePost(int postId) async {
+    await _client.deleteJson('/api/posts/$postId');
   }
 
   /// 点赞。需要登录，未登录时服务端返回 401「请先登录」。

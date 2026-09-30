@@ -27,6 +27,17 @@ def list_categories(db: Session) -> list[Category]:
     )
 
 
+def get_category(db: Session, category_id: int) -> Category | None:
+    """按 id 取分类，不存在时返回 None。
+
+    发帖要校验 `category_id` 是否真的存在：不校验的话外键约束会
+    在 `commit()` 时抛 `IntegrityError`，用户看到的是一个 500，
+    而不是「这个分类不存在」。分类查询集中在本模块，
+    社区那边直接复用，不另写一份。
+    """
+    return db.get(Category, category_id)
+
+
 def _filters(
     category_id: int | None,
     risk_level: str | None,

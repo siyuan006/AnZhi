@@ -1,5 +1,6 @@
 import 'package:anzhi/core/auth_controller.dart';
 import 'package:anzhi/pages/community_page.dart';
+import 'package:anzhi/pages/post_compose_page.dart';
 import 'package:anzhi/pages/post_detail_page.dart';
 import 'package:anzhi/services/post_api.dart';
 import 'package:flutter/material.dart';
@@ -173,14 +174,35 @@ void main() {
     });
   });
 
-  group('尚未实现的功能', () {
-    testWidgets('点发帖提示阶段 12d', (WidgetTester tester) async {
+  group('发帖入口', () {
+    testWidgets('未登录时点发帖，提示登录而不是打开发帖页', (WidgetTester tester) async {
       await pumpCommunity(tester, FakeBackend());
 
       await tester.tap(find.text('发帖'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('阶段 12d'), findsOneWidget);
+      expect(find.text('登录后可以发帖'), findsOneWidget);
+      expect(find.byType(PostComposePage), findsNothing);
+    });
+
+    testWidgets('登录后点发帖打开发帖页', (WidgetTester tester) async {
+      await pumpCommunity(tester, FakeBackend(), loggedIn: true);
+
+      await tester.tap(find.text('发帖'));
+      await tester.pumpAndSettle();
+
+      expect(find.byType(PostComposePage), findsOneWidget);
+    });
+  });
+
+  group('尚未实现的功能', () {
+    testWidgets('点搜索提示后续版本', (WidgetTester tester) async {
+      await pumpCommunity(tester, FakeBackend());
+
+      await tester.tap(find.byIcon(Icons.search_rounded));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('后续版本'), findsOneWidget);
       await tester.pump(const Duration(seconds: 5));
     });
   });

@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.models.post import Post
+from app.services.community import post_service
 from app.services.community.post_service import make_summary
 
 
@@ -90,6 +91,41 @@ class PostDetail(BaseModel):
             created_at=row.created_at,
             is_liked=is_liked,
         )
+
+
+class PostCreate(BaseModel):
+    """发布帖子的请求体。
+
+    **长度校验写在 `field_validator` 里，不写成 `Field(max_length=…)`。**
+    后者作用在**原始值**上，而且在 validator **之前**执行：
+    `"  " + 200 个字 + `"  "` 会被判超长，而用户看到的明明没超。
+    统一在 validator 里对规范化之后的文本判，才不会出现
+    「校验的和入库的不是同一个东西」（阶段 12b 的评论区踩过这个坑）。
+    """
+
+    title: str = Field(..., description="标题，会被压成单行")
+    content: str = Field(..., description="正文，保留分段")
+    category_id: int | None = Field(None, ge=1, description="分类，可不填")
+
+    @field_validator("title")
+    @classmethod
+    def check_title(cls, value: str) -> str:
+        normalized = post_service.normalize_title(value)
+        if len(normalized) < post_service.TITLE_MIN_LENGTH:
+            raise ValueError("标题不能为空")
+        if len(normalized) > post_service.TITLE_MAX_LENGTH:
+            raise ValueError(f"标题最长 {post_service.TITLE_MAX_LENGTH} 个字")
+        return normalized
+
+    @field_validator("content")
+    @classmethod
+    def check_content(cls, value: str) -> str:
+        normalized = post_service.normalize_content(value)
+        if len(normalized) < post_service.CONTENT_MIN_LENGTH:
+            raise ValueError("正文不能为空")
+        if len(normalized) > post_service.CONTENT_MAX_LENGTH:
+            raise ValueError(f"正文最长 {post_service.CONTENT_MAX_LENGTH} 个字")
+        return normalized
 
 
 class LikeState(BaseModel):

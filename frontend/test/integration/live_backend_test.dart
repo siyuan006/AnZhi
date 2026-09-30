@@ -65,6 +65,13 @@ void main() {
   // 其中某一条（`--plain-name`）会以 401「请先登录」失败 —— 那不是
   // 后端坏了，是登录根本没发生。要单独调，请整份文件一起跑。
   String? authToken;
+
+  /// 本次联调账号的用户 id，同样由「认证」组填上。
+  ///
+  /// 用来判断一条帖子是不是「别人发的」—— 删帖那条用例需要一条
+  /// 不属于自己的帖子才能验出 403。
+  int? authUserId;
+
   final AuthApi authApi = AuthApi(
     client: ApiClient(
       baseUrl: baseUrl,
@@ -345,6 +352,7 @@ void main() {
           password: accountPassword,
         );
         authToken = session.token;
+        authUserId = session.user.id;
 
         expect(session.token, isNotEmpty);
         expect(session.user.username, accountName);
@@ -391,6 +399,7 @@ void main() {
           password: accountPassword,
         );
         authToken = session.token;
+        authUserId = session.user.id;
 
         expect((await authApi.me()).username, accountName);
       });
@@ -791,12 +800,18 @@ void main() {
     () {
       /// 取一条帖子的 id；一条都没有时返回 null 并**跳过**。
       ///
-      /// 阶段 12a 只有读接口，发帖（12d）还没做，所以这里造不出数据来 ——
-      /// 空库时只能如实跳过，不能拿「列表是空的」冒充「详情能读出正文」。
+      /// 读接口（列表、详情、评论、点赞）都靠它拿一条真实存在的帖子。
+      /// 空库时如实跳过，不拿「列表是空的」冒充「详情能读出正文」。
+      ///
+      /// 发帖（12d）已经能用了，但没有在这里「没有就现造一条」：
+      /// 造出来的帖子属于本次运行的账号，跑完能删；可这些用例要验的
+      /// 是**读**，为它们顺带写库只会让「跑一遍联调留下什么」变得难说清。
+      /// 想让这几条真正跑起来，先用 App 发几条帖子（或者直接用
+      /// 后端自己的测试数据）—— 空库时它们会如实跳过，不会假装通过。
       Future<int?> firstPostId() async {
         final PagedResult<PostItem> all = await posts.fetchPosts();
         if (all.items.isEmpty) {
-          markTestSkipped('数据库里当前没有帖子，详情相关断言未验证（发帖在阶段 12d）');
+          markTestSkipped('数据库里当前没有帖子，详情相关断言未验证');
           return null;
         }
         return all.items.first.id;
@@ -1157,6 +1172,188 @@ void main() {
             isA<ApiException>()
                 .having((ApiException e) => e.statusCode, 'statusCode', 404),
           ),
+        );
+      });
+
+      test('「我的帖子」没有被 /{post_id} 吃掉', () async {
+        // FastAPI 按注册顺序匹配。顺序反了的话 `/mine` 会被当成
+        // post_id 去解析 int，拿到的是 422 而不是 401 —— 前端只会
+        // 看到一句莫名的校验错误。后端有一条测试钉着这件事，
+        // 这里再对着真实服务确认一遍顺序没被打乱。
+        await expectLater(
+          posts.fetchMyPosts(),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                .having((ApiException e) => e.message, 'message', '请先登录'),
+          ),
+        );
+      });
+
+      test('未登录发帖是 401 与「请先登录」', () async {
+        await expectLater(
+          posts.createPost(title: '匿名发帖', content: '不该成功'),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401)
+                .having((ApiException e) => e.message, 'message', '请先登录'),
+          ),
+        );
+      });
+
+      test('未登录读「我的帖子」是 401 与「请先登录」', () async {
+        await expectLater(
+          posts.fetchMyPosts(),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 401),
+          ),
+        );
+      });
+
+      test('发帖：读得回来，进得了「我的帖子」，删掉后处处不见', () async {
+        // ⚠️ 会往真实数据库写一行 posts，跑完自己删掉。
+        // 删的是软删除，行还留在库里（那样点赞与评论不会变成
+        // 指向空气的外键），但四个入口一律当它不存在。
+        final PostItem created = await authedPosts.createPost(
+          title: '联调测试帖 $accountName',
+          content: '这条帖子由联调测试创建，跑完会自己删掉。',
+        );
+
+        addTearDown(() async {
+          try {
+            await authedPosts.deletePost(created.id);
+          } on ApiException {
+            // 下面已经删过一次，第二次是 404。清理失败不该盖住
+            // 真正的断言失败。
+          }
+        });
+
+        expect(created.id, greaterThan(0));
+        expect(created.hasContent, isTrue, reason: '发帖要返回详情结构，界面据此直接进详情页');
+        expect(
+          created.summary,
+          isEmpty,
+          reason: '详情结构里是正文而不是摘要 —— 摘要是列表项的字段，'
+              '它由正文截断而来，两边都带只是多搬一份',
+        );
+        expect(created.likeCount, 0);
+        expect(created.commentCount, 0);
+        expect(created.isLiked, isFalse, reason: '自己刚发的帖子谈不上「我点过赞」');
+        expect(created.authorName, isNotEmpty);
+
+        final PagedResult<PostItem> mine =
+            await authedPosts.fetchMyPosts(pageSize: 100);
+        expect(
+          mine.items.any((PostItem p) => p.id == created.id),
+          isTrue,
+          reason: '刚发的帖子没出现在「我的帖子」里',
+        );
+
+        // 社区是公开的，别人（这里用匿名客户端代表）也该看得见
+        final PagedResult<PostItem> all = await posts.fetchPosts(pageSize: 100);
+        expect(
+          all.items.any((PostItem p) => p.id == created.id),
+          isTrue,
+          reason: '发出来的帖子别人看不见，等于发进了草稿箱',
+        );
+
+        await authedPosts.deletePost(created.id);
+
+        expect(
+          (await authedPosts.fetchMyPosts(pageSize: 100))
+              .items
+              .any((PostItem p) => p.id == created.id),
+          isFalse,
+          reason: '删掉了就该看不见，对自己也一样',
+        );
+        expect(
+          (await posts.fetchPosts(pageSize: 100))
+              .items
+              .any((PostItem p) => p.id == created.id),
+          isFalse,
+        );
+        await expectLater(
+          posts.fetchPostDetail(created.id),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 404),
+          ),
+        );
+      });
+
+      test('删别人的帖子是 403 与「只能删除自己的帖子」', () async {
+        // 已发布的帖子人人看得见，所以这里给 403 而不是 404 ——
+        // 假装它不存在只会让作者困惑。
+        final PagedResult<PostItem> all = await posts.fetchPosts(pageSize: 100);
+        final PostItem? someoneElse = all.items
+            .cast<PostItem?>()
+            .firstWhere((PostItem? p) => p!.author?.id != authUserId, orElse: () => null);
+
+        if (someoneElse == null) {
+          markTestSkipped('库里只有本次联调账号自己发的帖子，越权删除未验证');
+          return;
+        }
+
+        await expectLater(
+          authedPosts.deletePost(someoneElse.id),
+          throwsA(
+            isA<ApiException>()
+                .having((ApiException e) => e.statusCode, 'statusCode', 403)
+                .having((ApiException e) => e.message, 'message', '只能删除自己的帖子'),
+          ),
+        );
+
+        // 被拒之后那条帖子还得在
+        expect((await posts.fetchPostDetail(someoneElse.id)).id, someoneElse.id);
+      });
+
+      test('发帖响应的字段名与客户端解析的一致，且不带 username', () async {
+        // 假后端是按客户端预期手写的，字段名两边一起改就会一起「对」。
+        // 只有拿真实响应的原始 key 去比才拦得住漂移。
+        final ApiClient client = ApiClient(
+          baseUrl: baseUrl,
+          timeout: const Duration(seconds: 5),
+          token: () => authToken,
+        );
+        addTearDown(client.close);
+
+        final Object? body = await client.postJson('/api/posts', <String, dynamic>{
+          'title': '字段核对帖 $accountName',
+          'content': '这条帖子只用来核对字段名，跑完会删掉。',
+        });
+        final Map<String, dynamic> post = body! as Map<String, dynamic>;
+
+        addTearDown(() async {
+          try {
+            await client.deleteJson('/api/posts/${post['id']}');
+          } on ApiException {
+            // 同上
+          }
+        });
+
+        for (final String key in <String>[
+          'id',
+          'title',
+          'content',
+          'category_id',
+          'category_name',
+          'author',
+          'like_count',
+          'comment_count',
+          'created_at',
+          'is_liked',
+        ]) {
+          expect(post.containsKey(key), isTrue, reason: '发帖响应缺了 $key，字段名可能已漂移');
+        }
+
+        final Map<String, dynamic> author = post['author'] as Map<String, dynamic>;
+        expect(author.containsKey('name'), isTrue);
+        expect(author.containsKey('username'), isFalse);
+        expect(
+          hasKey(post, 'username'),
+          isFalse,
+          reason: '发帖响应里出现了 username，登录名被挂到公开接口上了',
         );
       });
     },

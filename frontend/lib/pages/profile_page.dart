@@ -6,6 +6,7 @@ import '../core/auth_controller.dart';
 import 'favorites_page.dart';
 import 'history_page.dart';
 import 'login_page.dart';
+import 'my_posts_page.dart';
 
 /// 安知 —— 我的页面
 ///
@@ -13,8 +14,8 @@ import 'login_page.dart';
 ///   个人信息 · 学习天数 · 收藏 · 历史记录 · 我的帖子
 ///   关注领域 · 首页布局 · 通知设置 · 关于安知
 ///
-/// ⚠️ 社区与个性化相关的入口（我的帖子 / 关注领域 / 首页布局 / 通知设置）
-/// 将在阶段 12、13 实现，点击会给出明确的阶段提示。
+/// ⚠️ 个性化相关的入口（关注领域 / 首页布局 / 通知设置）将在阶段 13
+/// 实现，点击会给出明确的阶段提示。
 class ProfilePage extends StatelessWidget {
   const ProfilePage({super.key});
 
@@ -48,7 +49,7 @@ class ProfilePage extends StatelessWidget {
               _MenuItem(
                 icon: Icons.article_outlined,
                 label: '我的帖子',
-                stage: '阶段 12',
+                onTap: () => _openMyPosts(context),
               ),
             ],
           ),
@@ -127,6 +128,9 @@ class ProfilePage extends StatelessWidget {
 
   Future<void> _openHistory(BuildContext context) =>
       _openAfterLogin(context, () => const HistoryPage());
+
+  Future<void> _openMyPosts(BuildContext context) =>
+      _openAfterLogin(context, () => const MyPostsPage());
 
   void _showAbout(BuildContext context) {
     showDialog<void>(
