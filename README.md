@@ -16,7 +16,7 @@
 | 2 | Git 仓库初始化 | ✅ 已完成 |
 | 3 | Flutter 项目创建 | ✅ 已完成 |
 | 4 | Flutter 五大页面 + 底部导航 | ✅ 已完成 |
-| 5 | FastAPI 后端 | ⬜ 待开始 |
+| 5 | FastAPI 后端 | ✅ 已完成 |
 | 6 | SQLite 数据库 | ⬜ 待开始 |
 | 7 | 前后端通信 | ⬜ 待开始 |
 | 8 | 接入 DeepSeek | ⬜ 待开始 |
@@ -31,8 +31,18 @@
 | 17 | APK 打包 | ⬜ 待开始 |
 | 18 | GitHub 发布 | ⬜ 待开始 |
 
-**当前进度：Flutter 前端骨架完成。** App 可编译、可运行，已产出 debug APK。
-AI 问答尚未接入后端（阶段 8），数据来自临时占位文件 `lib/core/sample_data.dart`。
+**当前进度：Flutter 前端骨架 + FastAPI 后端骨架完成。**
+
+- 前端：可编译、可运行，已产出 debug APK；数据仍来自临时占位文件 `lib/core/sample_data.dart`
+- 后端：`uvicorn app.main:app` 可启动，`/` 与 `/api/health` 已实测返回正确响应
+
+尚未打通的部分（按阶段推进，不做假实现）：
+
+| 未完成项 | 现状 | 计划阶段 |
+|---|---|---|
+| SQLite 数据库 | `/api/health` 如实返回 `database: "pending"` | 6 |
+| 前后端通信 | Flutter 仍读本地占位数据 | 7 |
+| DeepSeek AI 问答 | `/api/health` 返回 `ai_service: "not_configured"` | 8 |
 
 ---
 
@@ -118,6 +128,7 @@ AnZhi/
 │   │   └── config/    环境配置
 │   ├── tests/
 │   ├── requirements.txt
+│   ├── pytest.ini
 │   └── .env.example
 ├── docs/              PRD / 架构 / API / 数据库文档
 ├── assets/            图片等静态资源
@@ -204,7 +215,7 @@ flutter build apk --debug    # 构建 APK
 
 产物路径：`frontend/build/app/outputs/flutter-apk/app-debug.apk`
 
-### 后端（阶段 5 完成后可用）
+### 后端（已验证可用）
 
 ```bash
 cd backend
@@ -214,6 +225,21 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload
 ```
 
+启动后：
+
+| 地址 | 说明 |
+|---|---|
+| http://127.0.0.1:8000/ | 服务存活检查 |
+| http://127.0.0.1:8000/api/health | 健康检查（含数据库 / AI 配置状态） |
+| http://127.0.0.1:8000/docs | Swagger 交互式文档 |
+
+运行测试：
+
+```bash
+cd backend
+.venv\Scripts\python.exe -m pytest      # 8 passed
+```
+
 ### API 配置
 
 ```bash
@@ -221,6 +247,9 @@ cd backend
 cp .env.example .env
 # 编辑 .env，填入 DEEPSEEK_API_KEY
 ```
+
+> `.env` 不存在时后端**仍可正常启动**，健康检查会如实报告
+> `ai_service: "not_configured"`，不会崩溃也不会伪造状态。
 
 ---
 
