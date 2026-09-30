@@ -152,7 +152,11 @@ V1.0 固定六个分类，初始化时写入种子数据。
 | `knowledge_id` | INTEGER | FK → knowledge.id, INDEX | 知识 |
 | `viewed_at` | DATETIME | DEFAULT now, INDEX | 浏览时间 |
 
+**约束：** `UNIQUE(user_id, knowledge_id)`。
+
 > 同一用户重复浏览同一知识时**更新 `viewed_at`**，不新增记录。
+> 该 UNIQUE 约束把这条规则固化到数据库层：业务层负责 upsert，
+> 即使业务层漏判，数据库也不会产生重复历史。
 
 ---
 
@@ -224,6 +228,8 @@ V1.0 固定六个分类，初始化时写入种子数据。
 | users | `username` (UNIQUE), `email` (UNIQUE) | 登录查询 |
 | knowledge | `category_id`, `created_at`, `risk_level` | 分类筛选、时间排序 |
 | favorites | `(user_id, knowledge_id)` UNIQUE | 防重复 + 查询 |
+| favorites | `(user_id, created_at)` | 收藏列表按时间排序 |
+| histories | `(user_id, knowledge_id)` UNIQUE | 同一知识只保留一条记录 |
 | histories | `(user_id, viewed_at)` | 历史列表按时间排序 |
 | posts | `created_at`, `user_id` | 帖子列表 |
 | likes | `(post_id, user_id)` UNIQUE | 防重复点赞 |
@@ -233,9 +239,9 @@ V1.0 固定六个分类，初始化时写入种子数据。
 ## 5. 建表顺序（PROJECT_SPEC 第三十三节）
 
 ```text
-第 1 批（阶段6-1）   User ── Category ── Knowledge
-第 2 批（阶段6-2）   Favorite ── History
-第 3 批（阶段6-3）   Post ── Comment ── Like ── UserSettings
+第 1 批（阶段6-1）✅  User ── Category ── Knowledge
+第 2 批（阶段6-2）✅  Favorite ── History
+第 3 批（阶段6-3）⬜  Post ── Comment ── Like ── UserSettings
 ```
 
 **不要一次性创建全部表。**
