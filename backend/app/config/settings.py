@@ -65,7 +65,7 @@ class Settings:
         self.app_name: str = os.getenv("APP_NAME", "AnZhi")
         self.app_env: str = os.getenv("APP_ENV", "development")
         self.debug: bool = _get_bool("DEBUG", True)
-        self.version: str = "1.0.0"
+        self.version: str = "1.1.0"
 
         # ---- 服务监听 ----
         self.host: str = os.getenv("HOST", "0.0.0.0")

@@ -1,5 +1,24 @@
 # 版本发布说明
 
+## v1.1.0
+
+2026-10-20
+
+### 修复
+
+- 修复 debug 构建失败：`frontend/android/app/src/debug/res/xml/network_security_config.xml`
+  的注释里含有 XML 非法的 `--`，导致 `:app:parseDebugLocalResources` 解析失败、
+  `flutter build apk --debug` 无法出包。release 构建不受影响。
+- 版本号同步到 1.1.0（Flutter `1.1.0+2`，后端 `/api/health`）。
+
+### 验证
+
+- `pytest`、`flutter analyze`、`flutter test` 全部通过。
+- 真机 Redmi 24117RK2CC（Android 16）通过 USB 调试安装并运行；本地配置
+  API Key 后，`adb reverse` 联调下 AI 问答返回结构化回答。
+
+> 本版本未重新构建 / 上传 APK 附件；Release 页面上的 `app-release.apk` 仍是 v1.0.0。
+
 ## v1.0.0
 
 安知 AnZhi —— AI 安全知识科普助手，首个可安装版本。

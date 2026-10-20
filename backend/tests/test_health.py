@@ -33,7 +33,7 @@ class TestHealth:
 
         body = response.json()
         assert body["status"] == "ok"
-        assert body["version"] == "1.0.0"
+        assert body["version"] == "1.1.0"
 
     def test_database_status_is_really_probed(self) -> None:
         """database 字段必须是真实探测结果，不是写死的常量。

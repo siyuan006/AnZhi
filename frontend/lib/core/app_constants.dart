@@ -12,7 +12,7 @@ import 'package:flutter/material.dart';
 
 const String kAppName = '安知';
 const String kAppSlogan = 'AI 安全知识科普助手';
-const String kAppVersion = '1.0.0';
+const String kAppVersion = '1.1.0';
 
 // ---------------------------------------------------------------------------
 // 风险等级（PROJECT_SPEC 第十节）

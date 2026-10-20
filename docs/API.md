@@ -103,7 +103,7 @@ Flutter 端通过 `lib/services/api_client.dart` 统一发起请求，**页面�
 ```json
 {
   "status": "ok",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "database": "connected",
   "ai_service": "configured"
 }

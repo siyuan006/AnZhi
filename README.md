@@ -8,6 +8,8 @@
 
 **下载：** [Releases → v1.0.0](https://github.com/siyuan006/AnZhi/releases/tag/v1.0.0)（`app-release.apk`，49.1 MB，安装前需先跑起后端，见「APK 打包」一节）
 
+**当前代码版本：** v1.1.0（修复 debug 构建；可下载的 Release 附件仍为 v1.0.0）
+
 ---
 
 ## 项目状态
